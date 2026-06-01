@@ -108,8 +108,9 @@ u32 fsop_GetFreeSpaceKb(const char *path) // Return free kb on the device passed
 	return ret ;
 }
 
-static void *thread_CopyFileReader()
+static void *thread_CopyFileReader(void *arg)
 {
+	(void)arg;
 	u32 rb;
 	stopThread = 0;
 	DCFlushRange(&stopThread, sizeof(stopThread));

@@ -19,7 +19,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <ogc/machine/processor.h>
-#include <ogc/lwp_threads.h>
+#include <ogc/lwp.h>
 // for directory parsing and low-level file I/O
 #include <sys/types.h>
 #include <sys/stat.h>

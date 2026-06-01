@@ -115,6 +115,13 @@ int main(int argc, char **argv)
 		/* load and check wiiflow save for possible new IOS and Port settings */
 		if(InternalSave.CheckSave())
 			InternalSave.LoadSettings();
+
+		/* RA build override: force mainIOS to the build-time DOL_MAIN_IOS,
+		 * ignoring any value that may have been saved to NAND. This is here
+		 * because a bad NAND save (wrong cIOS slot) makes WiiFlow exit
+		 * back to HBC at boot time. Remove this once a valid NAND save exists. */
+		mainIOS    = DOL_MAIN_IOS;
+		useMainIOS = true;
 			
 		/* Handle (c)IOS Loading */
 		if(useMainIOS && CustomIOS(IOS_GetType(mainIOS)))// load cios
@@ -140,6 +147,7 @@ int main(int argc, char **argv)
 		
 	/* mount SD */
 	DeviceHandle.MountSD();// mount SD before calling isUsingUSB() duh!	
+
 
 	/* mount USB if needed */
 	DeviceHandle.SetMountUSB(!sdOnly && !isWiiVC);

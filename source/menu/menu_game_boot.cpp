@@ -1,5 +1,6 @@
 
 #include <fcntl.h>
+#include <stdio.h>
 #include <ogc/machine/processor.h>
 #include <ogc/lwp_watchdog.h>
 
@@ -26,6 +27,7 @@
 #include "loader/nk.h"
 #include "memory/memory.h"
 #include "network/gcard.h"
+#include "retroachievements/ra_exi.h"
 
 static void setLanguage(int l)
 {
@@ -884,11 +886,9 @@ void CMenu::_launchChannel(dir_discHdr *hdr)
 
 	bool cheat = m_gcfg2.getBool(id, "cheat", false);
 	hooktype = (u32) m_gcfg2.getInt(id, "hooktype", 0);
-	if((cheat || debuggerselect == 1) && hooktype == 0)// cheats or gecko debugger enabled, set hooktype (0)auto to (1)vbi
+	if((cheat || debuggerselect == 1) && hooktype == 0)
 		hooktype = 1;
-	else if(!cheat && debuggerselect != 1)
-		hooktype = 0;
-	
+
 	u8 *cheatFile = NULL;
 	u32 cheatSize = 0;
 	if(cheat)
@@ -1070,7 +1070,7 @@ void CMenu::_launchWii(dir_discHdr *hdr, bool dvd, bool disc_cfg)
 			/* Read Wii disc header to get id */
 			Disc_ReadHeader(&wii_hdr);
 			memcpy(hdr->id, wii_hdr.id, 6);
-			
+
 			/* set game type */
 			hdr->type = TYPE_WII_GAME;
 			
@@ -1087,8 +1087,20 @@ void CMenu::_launchWii(dir_discHdr *hdr, bool dvd, bool disc_cfg)
 			currentPartition = m_cfg.getInt(WII_DOMAIN, "partition", 1);
 		}
 	}
-	
-	/* clear coverflow, start wiiflow wait animation, set exit handler */	
+
+	/* RetroAchievements: tell the ESP32 adapter which Wii game is loading.
+	 * Covers both disc and USB/WBFS paths — hdr->id is set in both cases.
+	 * Blocks until the adapter reports GAME_LOADED (0x06) or times out (30 s).
+	 * Boot proceeds either way — RA is best-effort. */
+	{
+		char ra_game_id[7];
+		strncpy(ra_game_id, hdr->id, 6);
+		ra_game_id[6] = '\0';
+		if (RA_EXI_Probe())
+			RA_EXI_LoadGame(ra_game_id, 90000);  // 90s — ESP32 needs time to fetch/parse the achievement patch
+	}
+
+	/* clear coverflow, start wiiflow wait animation, set exit handler */
 	_launchShutdown();
 	string id(hdr->id);
 	string path(hdr->path);// empty if a dvd
@@ -1147,12 +1159,12 @@ void CMenu::_launchWii(dir_discHdr *hdr, bool dvd, bool disc_cfg)
 	if((id == "RPWE41" || id == "RPWZ41" || id == "SPXP41") && debuggerselect == 1) // Prince of Persia: The Forgotten Sands
 		debuggerselect = 0;
 		
-	bool cheat = m_gcfg2.getBool(id, "cheat", false);	
+	bool cheat = m_gcfg2.getBool(id, "cheat", false);
 	hooktype = (u32)m_gcfg2.getInt(id, "hooktype", 0); // hooktype is defined in patchcode.h
-	if((cheat || debuggerselect == 1) && hooktype == 0)// cheats or gecko debugger enabled, set hooktype (0)auto to (1)vbi
+	/* RA VBlank hook no longer needed: ra-module (Starlet) reads the PPC VBlank counter
+	 * directly from MEM1, so no PPC-side code hook is required. */
+	if((cheat || debuggerselect == 1) && hooktype == 0)
 		hooktype = 1;
-	else if(!cheat && debuggerselect != 1)
-		hooktype = 0;
 
 	load_wip_patches((u8 *)m_wipDir.c_str(), (u8 *) &id);
 
@@ -1264,14 +1276,12 @@ void CMenu::_launchWii(dir_discHdr *hdr, bool dvd, bool disc_cfg)
 		return;
 	}
 
-	/* load selected cIOS if necessary */
-	if(!dvd)
+	/* load selected cIOS if necessary; force reload for dvd too so gameconfig2.ini [GAMEID] ios=NNN applies.
+	 * TempLoadIOS is a no-op when WiiFlow itself runs on a cIOS, so we must always call _loadGameIOS. */
+	if(_loadGameIOS(gameIOS, userIOS, id.c_str()) == LOAD_IOS_FAILED)
 	{
-		if(_loadGameIOS(gameIOS, userIOS, id.c_str()) == LOAD_IOS_FAILED)
-		{
-			/* error message already shown */
-			return;
-		}
+		/* error message already shown */
+		return;
 	}
 
 	/* if d2x cios patch returnto and enable emu nand */
@@ -1336,9 +1346,8 @@ void CMenu::_launchWii(dir_discHdr *hdr, bool dvd, bool disc_cfg)
 		write32(0xd8006a0, wiiuWidescreen == 2 ? 0x30000004 : 0x30000002);
 		mask32(0xd8006a8, 0, 2);
 	}
-	
 	ExternalBooter_WiiGameSetup(wbfs_partition, dvd, patchregion, JustDanceGame, id.c_str());
-	WiiFlow_ExternalBooter(videoMode, vipatch, countryPatch, patchVidMode, aspectRatio, private_server, server_addr.c_str(), 
+	WiiFlow_ExternalBooter(videoMode, vipatch, countryPatch, patchVidMode, aspectRatio, private_server, server_addr.c_str(),
 							videoWidth, fix480p, deflicker, returnTo, TYPE_WII_GAME, use_led);
 
 	Sys_Exit();

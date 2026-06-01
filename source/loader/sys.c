@@ -1,5 +1,5 @@
 
-#include <ogc/lwp_threads.h>
+#include <ogc/lwp.h>
 #include <ogc/pad.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,15 +19,16 @@
 
 /* Variables */
 bool reset = false;
-bool shutdown = false;
+bool sys_shutdown = false;
 volatile u8 ExitOption = 0;
 const char *NeekPath = NULL;
 char wii_games_dir[64];
 char gc_games_dir[64];
 
-void __Wpad_PowerCallback()
+void __Wpad_PowerCallback(s32 chan)
 {
-	shutdown = 1;
+	(void)chan;
+	sys_shutdown = 1;
 }
 
 void Open_Inputs(void)
@@ -62,8 +63,8 @@ bool Sys_Exiting(void)
 {
 	if(!isWiiVC)
 		DCFlushRange(&reset, 32);
-	DCFlushRange(&shutdown, 32);
-	return reset || shutdown;
+	DCFlushRange(&sys_shutdown, 32);
+	return reset || sys_shutdown;
 }
 
 int Sys_GetExitTo(void)
@@ -143,7 +144,7 @@ void __Sys_ResetCallback(u32 irq, void *ctx)
 
 void __Sys_PowerCallback(void)
 {
-	shutdown = true;
+	sys_shutdown = true;
 }
 
 void Sys_Init(void)

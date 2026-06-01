@@ -3,7 +3,7 @@
 #include <string.h>
 #include <ogcsys.h>
 #include <unistd.h>
-#include <ogc/lwp_threads.h>
+#include <ogc/lwp.h>
 #include <ogc/lwp_watchdog.h>
 #include <ogc/machine/processor.h>
 

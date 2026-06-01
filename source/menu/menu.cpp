@@ -26,6 +26,7 @@
 #include "network/gcard.h"
 #include "unzip/U8Archive.h"
 #include "network/proxysettings.h"
+#include "retroachievements/ra_exi.h"
 
 // Sounds
 extern const u8 click_wav[];
@@ -143,8 +144,10 @@ bool CMenu::init(bool usb_mounted)
 	if(m_use_wifi_gecko || m_cfg.getBool("GENERAL", "async_network", false))
 		_initAsyncNetwork();
 		
-	/* Check if we want SD Gecko */
-	m_use_sd_logging = m_cfg.getBool("DEBUG", "sd_write_log", false);
+	/* Force sd_write_log ON regardless of wiiflow_lite.ini value. Diagnostic
+	 * build — we need sd:/wiiflow.log to capture the full boot path. */
+	m_use_sd_logging = true;
+	(void)m_cfg.getBool("DEBUG", "sd_write_log", true);  /* keep key alive */
 	LogToSD_SetBuffer(m_use_sd_logging);
 	/* ------------------------------------------------------*/
 	
@@ -477,6 +480,8 @@ bool CMenu::init(bool usb_mounted)
 
 	/* Init Button Manager and build the menus */
 	_buildMenus();
+
+	RA_EXI_Probe();
 
 	return true;
 }

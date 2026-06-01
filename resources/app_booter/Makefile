@@ -35,7 +35,7 @@ INCLUDES	:=
 #---------------------------------------------------------------------------------
 # options for code generation
 #---------------------------------------------------------------------------------
-MACHDEP := -mno-eabi -mno-sdata -mcpu=750
+MACHDEP := -DGEKKO -DHW_RVL -mno-eabi -mno-sdata -mcpu=750
 CFLAGS	:= -Wall -W -O1 -ffreestanding -std=gnu99 -Wstrict-aliasing=2 $(MACHDEP) $(INCLUDE)
 LDFLAGS	:= -nostartfiles -nostdlib $(MACHDEP) -Wl,--no-warn-rwx-segments
 

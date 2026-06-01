@@ -30,7 +30,7 @@
 
 lwp_t light_thread = LWP_THREAD_NULL;
 
-void *light_loop();
+void *light_loop(void *arg);
 bool light_on = false;
 u8 light_level = 0;
 
@@ -88,8 +88,9 @@ void wiiLightSetLevel(int level)
  * Its all an eye trick ;)
  *
  */
-void *light_loop()
+void *light_loop(void *arg)
 {
+	(void)arg;
 	/*struct timespec timeon;
 	struct timespec timeoff;
 

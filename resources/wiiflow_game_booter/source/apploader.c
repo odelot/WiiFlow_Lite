@@ -92,7 +92,7 @@ u32 Apploader_Run(u8 vidMode, GXRModeObj *vmode, bool vipatch, bool countryStrin
 	appldr_entry = apploader_hdr.entry;
 
 	/* Call apploader entry */
-	appldr_entry(&appldr_init, &appldr_main, &appldr_final);
+	appldr_entry(&appldr_init, (int (**)(void))&appldr_main, (void *(**)(void))&appldr_final);
 
 	/* Initialize apploader */
 	appldr_init(gprintf);

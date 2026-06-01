@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <ogc/machine/processor.h>
-#include <ogc/lwp_threads.h>
+#include <ogc/lwp.h>
 #include <vector>
 #include <string>
 #include "homebrew.h"
@@ -171,12 +171,12 @@ void BootHomebrew()
 	/*u32 cpu_isr;
 	SYS_ResetSystem(SYS_SHUTDOWN, 0, 0);
 	_CPU_ISR_Disable( cpu_isr );
-	__exception_closeall();
+	//__exception_closeall();
 	BOOTER_ENTRY();
 	_CPU_ISR_Restore( cpu_isr );*/
 }
 
-extern "C" { extern void __exception_closeall(); }
+//extern "C" { extern void __exception_closeall(); }
 u32 AppEntrypoint = 0;
 void JumpToEntry(entry EntryPoint)
 {
@@ -185,7 +185,7 @@ void JumpToEntry(entry EntryPoint)
 	SYS_ResetSystem(SYS_SHUTDOWN, 0, 0);// does __IOS_ShutdownSubsystems() and __lwp_thread_closeall() before IRQ_Disable()
 	u32 level = IRQ_Disable();// does _CPU_ISR_Disable()
 	//__IOS_ShutdownSubsystems();
-	__exception_closeall();
+	//__exception_closeall();
 	//__lwp_thread_closeall(); //dont like it but whatever
 	asm volatile (
 		"lis %r3, AppEntrypoint@h\n"
