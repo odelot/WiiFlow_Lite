@@ -30,6 +30,11 @@ static void ra_log(const char *msg)
     if (f) { fputs(msg, f); fputc('\n', f); fclose(f); }
 }
 
+void RA_EXI_Log(const char *msg)
+{
+    ra_log(msg);
+}
+
 /* EXI wiring — ESP32 in Slot B (chan 1). Slot A (chan 0) is reserved by
  * IOS internals and our ra-module on Starlet can't drive the bus there. */
 #define RA_EXI_CHAN  1   /* Slot B */
@@ -163,25 +168,36 @@ bool RA_EXI_Probe(void)
     return false;
 }
 
-bool RA_EXI_LoadGame(const char *game_id, u32 timeout_ms)
+bool RA_EXI_LoadGame(const char *game_id, u32 timeout_ms, const char *md5_hex)
 {
     if (!game_id || game_id[0] == '\0') return false;
     if (timeout_ms == 0) timeout_ms = RA_DEFAULT_TIMEOUT_MS;
 
     /* ---------- 1. Send LOAD_GAME ---------- */
+    /* Mirrors ra_load_game_t in gc_ra_protocol.h. md5_hex (32 lowercase
+     * hex chars, computed on-console by RA_ComputeWiiHash) lets the ESP
+     * identify the game exactly like Dolphin would — no game-ID table. */
     struct __attribute__((packed)) {
         ra_gc_header_t  hdr;
         char            game_id[RA_GAME_ID_LEN];
         u8              disc_number;   /* 0 for single-disc */
-        u8              has_hash;      /* 0 — let ESP32 do the lookup */
+        u8              has_hash;
+        char            md5_hash[RA_HASH_LEN];
     } tx;
 
     tx.hdr.magic       = RA_MAGIC_GC_TO_ESP;
     tx.hdr.command     = RA_CMD_LOAD_GAME;
-    tx.hdr.payload_len = RA_GAME_ID_LEN + 2; /* game_id + 2 bytes */
+    tx.hdr.payload_len = sizeof(tx) - sizeof(ra_gc_header_t);
     memcpy(tx.game_id, game_id, RA_GAME_ID_LEN);
     tx.disc_number = 0;
-    tx.has_hash    = 0;
+    memset(tx.md5_hash, 0, sizeof(tx.md5_hash));
+    if (md5_hex && md5_hex[0]) {
+        tx.has_hash = 1;
+        memcpy(tx.md5_hash, md5_hex, RA_HASH_LEN);
+        ra_log(md5_hex);
+    } else {
+        tx.has_hash = 0;
+    }
 
     u8 rx6[sizeof(ra_esp_header_t)] = {0};
 

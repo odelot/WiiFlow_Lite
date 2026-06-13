@@ -28,6 +28,7 @@
 #include "memory/memory.h"
 #include "network/gcard.h"
 #include "retroachievements/ra_exi.h"
+#include "retroachievements/ra_hash.h"
 
 static void setLanguage(int l)
 {
@@ -1090,14 +1091,33 @@ void CMenu::_launchWii(dir_discHdr *hdr, bool dvd, bool disc_cfg)
 
 	/* RetroAchievements: tell the ESP32 adapter which Wii game is loading.
 	 * Covers both disc and USB/WBFS paths — hdr->id is set in both cases.
-	 * Blocks until the adapter reports GAME_LOADED (0x06) or times out (30 s).
-	 * Boot proceeds either way — RA is best-effort. */
+	 * Blocks until the adapter reports GAME_LOADED (0x06) or times out.
+	 * Boot proceeds either way — RA is best-effort.
+	 *
+	 * ra_active is reused below: when the adapter is present we force the
+	 * Ocarina VBI hooktype and inject the RA VBlank counter as a C0 cheat
+	 * code (see ocarina_load_code), so the d2x ra-module can fire its
+	 * memory snapshots aligned with the game's vertical retrace. */
+	bool ra_active = false;
 	{
 		char ra_game_id[7];
 		strncpy(ra_game_id, hdr->id, 6);
 		ra_game_id[6] = '\0';
 		if (RA_EXI_Probe())
-			RA_EXI_LoadGame(ra_game_id, 90000);  // 90s — ESP32 needs time to fetch/parse the achievement patch
+		{
+			ra_active = true;
+			/* Compute the RA hash on-console (rcheevos rc_hash_wii_disc
+			 * port — same MD5 Dolphin produces) so ANY game RA knows is
+			 * identified. Works for WBFS/.wbfs/.iso images AND physical
+			 * discs (raw reads via the disc-ripper path); on any failure
+			 * the ESP falls back to its game-ID table. Costs a few
+			 * seconds of reads during the load screen. */
+			char ra_md5[33];
+			ra_md5[0] = '\0';
+			RA_ComputeWiiHash((const u8 *)hdr->id, hdr->path, ra_md5);
+			RA_EXI_LoadGame(ra_game_id, 90000,
+			                ra_md5[0] ? ra_md5 : NULL);  // 90s — ESP32 fetch/parse time
+		}
 	}
 
 	/* clear coverflow, start wiiflow wait animation, set exit handler */
@@ -1161,9 +1181,12 @@ void CMenu::_launchWii(dir_discHdr *hdr, bool dvd, bool disc_cfg)
 		
 	bool cheat = m_gcfg2.getBool(id, "cheat", false);
 	hooktype = (u32)m_gcfg2.getInt(id, "hooktype", 0); // hooktype is defined in patchcode.h
-	/* RA VBlank hook no longer needed: ra-module (Starlet) reads the PPC VBlank counter
-	 * directly from MEM1, so no PPC-side code hook is required. */
-	if((cheat || debuggerselect == 1) && hooktype == 0)
+	/* RA needs the VBI hooktype too: the RA VBlank counter is a C0 cheat
+	 * code executed by the Ocarina codehandler every vertical retrace
+	 * (ocarina_load_code injects it). Without a hooktype the codehandler
+	 * never runs and the counter at 0x2FF8 stays frozen — ra-module then
+	 * silently falls back to timer pacing. */
+	if((cheat || debuggerselect == 1 || ra_active) && hooktype == 0)
 		hooktype = 1;
 
 	load_wip_patches((u8 *)m_wipDir.c_str(), (u8 *) &id);
@@ -1326,11 +1349,15 @@ void CMenu::_launchWii(dir_discHdr *hdr, bool dvd, bool disc_cfg)
 		WBFS_Close();
 	}
 	
-	/* move cheats for external booter */
-	if(cheatFile != NULL)
+	/* move cheats for external booter — also runs when RA is active with no
+	 * user cheats, because ocarina_load_code builds a standalone GCT around
+	 * the RA VBlank counter hook in that case. */
+	int ra_gct_size = 0;
+	if(cheatFile != NULL || ra_active)
 	{
-		ocarina_load_code(cheatFile, cheatSize);
-		MEM2_free(cheatFile);
+		ra_gct_size = ocarina_load_code(cheatFile, cheatSize);
+		if(cheatFile != NULL)
+			MEM2_free(cheatFile);
 	}
 	
 	/* move gameconfig for external booter */
@@ -1346,6 +1373,14 @@ void CMenu::_launchWii(dir_discHdr *hdr, bool dvd, bool disc_cfg)
 		write32(0xd8006a0, wiiuWidescreen == 2 ? 0x30000004 : 0x30000002);
 		mask32(0xd8006a8, 0, 2);
 	}
+	/* Snapshot of everything handed to the external booter for the RA VBI
+	 * hook — written to sd:/ra_exi_debug.txt (SD is still mounted here;
+	 * WiiFlow_ExternalBooter unmounts). Proves which build ran and what
+	 * hooktype/GCT the booter received. */
+	if(ra_active)
+		RA_EXI_Log(fmt("[WF v0.22.2] %s ra=1 cheat=%d hook=%u dbg=%u gct=%d",
+			id.c_str(), cheat ? 1 : 0, (unsigned)hooktype, (unsigned)debuggerselect, ra_gct_size));
+
 	ExternalBooter_WiiGameSetup(wbfs_partition, dvd, patchregion, JustDanceGame, id.c_str());
 	WiiFlow_ExternalBooter(videoMode, vipatch, countryPatch, patchVidMode, aspectRatio, private_server, server_addr.c_str(),
 							videoWidth, fix480p, deflicker, returnTo, TYPE_WII_GAME, use_led);

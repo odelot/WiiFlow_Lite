@@ -253,56 +253,84 @@ int ocarina_load_code(const u8 *cheat, u32 cheatSize)
 		codelist = (u8 *) 0x800028B8;
 	codelistend = (u8 *) 0x80003000;
 
-	/* RetroAchievements VBlank Sync Hook (Adds 1 to 0x80002FF8 every frame)
-	   C0000000 00000003
-	   3D608000 818B2FF8
-	   398C0001 918B2FF8
-	   4E800020 00000000 */
+	/* RetroAchievements VBlank sync hook — a Gecko C0 code (ASM executed by
+	 * the codehandler on every VBI). Increments the u32 frame counter at
+	 * physical 0x2FF8; the d2x ra-module (Starlet) polls that address to
+	 * fire its memory SNAPSHOT aligned with the game's vertical retrace.
+	 *
+	 * The store goes through the UNCACHED MEM1 mirror (0xC0002FF8), NOT the
+	 * cached 0x80002FF8. A cached store would sit in Broadway's L1 until
+	 * eviction, so the Starlet would see the counter frozen or advancing in
+	 * bursts — useless for per-frame edge detection. Uncached stores reach
+	 * MEM1 immediately.
+	 *
+	 *   C0000000 00000003   (C0 = execute ASM, 3 lines of 8 bytes follow)
+	 *   3D60C000 818B2FF8   lis r11,0xC000 ; lwz r12,0x2FF8(r11)
+	 *   398C0001 918B2FF8   addi r12,r12,1 ; stw r12,0x2FF8(r11)
+	 *   4E800020 00000000   blr            ; (pad)
+	 */
 	const u8 ra_vblank_hook[] = {
 		0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03,
-		0x3D, 0x60, 0x80, 0x00, 0x81, 0x8B, 0x2F, 0xF8,
+		0x3D, 0x60, 0xC0, 0x00, 0x81, 0x8B, 0x2F, 0xF8,
 		0x39, 0x8C, 0x00, 0x01, 0x91, 0x8B, 0x2F, 0xF8,
 		0x4E, 0x80, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00
 	};
 	u32 ra_hook_size = sizeof(ra_vblank_hook);
 
-	code_size = cheatSize + ra_hook_size;
-	
-	/* Always allocate space even if user cheats are empty */
+	/* The counter lives at the tail of the codelist region. Cap the total
+	 * GCT size so the copied codes can never grow into it (0x2FF8..0x2FFF
+	 * reserved). If a user's cheat pack is too big to fit alongside the
+	 * hook, keep the cheats and skip the hook — ra-module falls back to
+	 * timer pacing automatically when the counter never moves. */
+	u32 code_cap = (u32)0x80002FF8 - (u32)codelist;
+	int inject_hook = 1;
+	if (cheatSize + ra_hook_size > code_cap) {
+		gprintf("Ocarina: GCT too big for RA hook (%u + %u > %u), skipping hook.\n",
+		        cheatSize, ra_hook_size, code_cap);
+		inject_hook = 0;
+		if (cheatSize > code_cap) {
+			gprintf("Ocarina: GCT alone exceeds codelist space, no codes loaded!\n");
+			code_buf = NULL;
+			code_size = 0;
+			return 0;
+		}
+	}
+
+	code_size = cheatSize + (inject_hook ? ra_hook_size : 0);
+	if (cheatSize == 0 || cheat == NULL)
+		code_size = 8 + ra_hook_size + 8;  /* standalone GCT: header + hook + footer */
+
 	code_buf = (u8*)MEM1_lo_alloc(code_size);
 	if(code_buf == NULL)
 	{
 		gprintf("Ocarina: Couldnt allocate buffer!\n");
-		code_buf = NULL;
 		code_size = 0;
 		return 0;
 	}
 
 	if (cheatSize > 0 && cheat != NULL) {
-		/* If there are existing GCT codes, we inject our RA hook before the footer.
-		   The GCT footer is F0000000 00000000 (8 bytes) at the end. */
-		if (cheatSize >= 8 && cheat[cheatSize-8] == 0xF0 && cheat[cheatSize-7] == 0x00) {
+		if (inject_hook && cheatSize >= 8
+		    && cheat[cheatSize-8] == 0xF0 && cheat[cheatSize-7] == 0x00) {
+			/* Inject our RA hook just before the GCT footer (F0000000 00000000). */
 			memcpy(code_buf, cheat, cheatSize - 8);
 			memcpy(code_buf + cheatSize - 8, ra_vblank_hook, ra_hook_size);
-			memcpy(code_buf + cheatSize - 8 + ra_hook_size, cheat + cheatSize - 8, 8); // Restore footer
-		} else {
+			memcpy(code_buf + cheatSize - 8 + ra_hook_size, cheat + cheatSize - 8, 8);
+		} else if (inject_hook) {
 			memcpy(code_buf, cheat, cheatSize);
 			memcpy(code_buf + cheatSize, ra_vblank_hook, ra_hook_size);
+		} else {
+			memcpy(code_buf, cheat, cheatSize);
 		}
 	} else {
-		/* No user cheats, we must create a valid GCT header and footer around our hook */
+		/* No user cheats — build a minimal valid GCT around the hook. */
 		const u8 gct_header[] = { 0x00, 0xD0, 0xC0, 0xDE, 0x00, 0xD0, 0xC0, 0xDE };
 		const u8 gct_footer[] = { 0xF0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
-		code_size = 8 + ra_hook_size + 8;
-		MEM1_lo_free(code_buf); // Realloc
-		code_buf = (u8*)MEM1_lo_alloc(code_size);
-		
 		memcpy(code_buf, gct_header, 8);
 		memcpy(code_buf + 8, ra_vblank_hook, ra_hook_size);
 		memcpy(code_buf + 8 + ra_hook_size, gct_footer, 8);
 	}
 
-	gprintf("Ocarina: Codes found and RA Hook Injected.\n");
+	gprintf("Ocarina: codes loaded%s.\n", inject_hook ? " + RA VBlank hook" : "");
 	DCFlushRange(code_buf, code_size);
 	return code_size;
 }

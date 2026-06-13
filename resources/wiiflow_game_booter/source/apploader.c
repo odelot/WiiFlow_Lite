@@ -124,7 +124,20 @@ u32 Apploader_Run(u8 vidMode, GXRModeObj *vmode, bool vipatch, bool countryStrin
 	
 	if(hooktype != 0 && hookpatched)
 		ocarina_do_code();
-	
+
+	/* RA VBI-hook diagnostic breadcrumb, read back by the d2x ra-module at
+	 * phys 0x2FE0 (OCAP line in the ESP serial log). Uncached store so it
+	 * lands in MEM1 immediately. Written AFTER ocarina_do_code because
+	 * load_handler/codelist setup memsets this region.
+	 *   0x5242hhpp — 'RB' tag, hh = hooktype, pp = hookpatched.
+	 * 0x2FE4 gets the GCT size the booter actually received (0 = the
+	 * cheats pointer never made it across the WiiFlow→booter handoff). */
+	{
+		extern u32 code_size;
+		*(volatile u32 *)0xC0002FE0 = 0x52420000u | ((hooktype & 0xFFu) << 8) | (hookpatched ? 1u : 0u);
+		*(volatile u32 *)0xC0002FE4 = code_size;
+	}
+
 	//! Apply the 480p fix.
 	//! This needs to be done after the call to maindolpatches(), after loading any code handler.
 	//! Can (and should) be done before Wiimmfi patching, can't be done in maindolpatches() itself.
