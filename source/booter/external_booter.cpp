@@ -17,7 +17,9 @@
 #include <gccore.h>
 #include <string.h>
 #include <ogc/machine/processor.h>
-#include <ogc/lwp_threads.h>
+#include <ogc/lwp.h>
+#include <ogc/lwp_watchdog.h>
+#include <ogc/system.h>
 #include <ogc/cache.h>
 #include "external_booter.hpp"
 #include "Config.h"

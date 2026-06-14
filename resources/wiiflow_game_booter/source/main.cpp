@@ -44,7 +44,7 @@ GXRModeObj *vmode = NULL;
 u32 AppEntrypoint = 0;
 
 extern "C" {
-extern void __exception_closeall();
+//extern void __exception_closeall();
 extern s32 wbfsDev;
 extern u32 wbfs_part_idx;
 extern FragList *frag_list;
@@ -143,7 +143,7 @@ int main()
 	/* Shutdown IOS subsystems */
 	u32 level = IRQ_Disable();
 	__IOS_ShutdownSubsystems();
-	__exception_closeall();
+	//__exception_closeall();
 
 	/* Originally from tueidj - taken from NeoGamma (thx) */
 	*(vu32*)0xCC003024 = 1;

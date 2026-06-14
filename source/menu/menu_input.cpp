@@ -130,7 +130,7 @@ void CMenu::ScanInput()
 	ShowGameZone();
 }
 
-extern "C" { extern bool shutdown; };
+extern "C" { extern bool sys_shutdown; };
 u64 button_time = 0;
 #define CheckTime()		(ticks_to_millisecs(diff_ticks((button_time), gettick())) > 200)
 #define UpdateTime()	button_time = gettick()
@@ -150,7 +150,7 @@ void CMenu::ButtonsPressed()
 		ds3_btnsPressed = 0;
 
 	if(ds3_btnsPressed & DS3_BUTTON_SELECT)
-		shutdown = 1;
+		sys_shutdown = 1;
 	else
 		gc_btnsPressed |= ds3_to_pad(ds3_btnsPressed);
 

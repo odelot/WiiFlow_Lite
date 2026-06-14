@@ -16,6 +16,7 @@ extern "C"
 {
 #endif
 
+#if 0
 #ifndef socklen_t
 typedef uint8_t socklen_t;
 #define socklen_t socklen_t
@@ -42,23 +43,25 @@ struct sockaddr_storage {
   int64_t		__ss_align;
   char			_ss_pad2[_SS_PAD2SIZE];
 };
+#endif
+
 
 #include <sys/uio.h>
 
 struct msghdr
 {
   void *		msg_name;	/* Socket name			*/
-  socklen_t		msg_namelen;	/* Length of name		*/
+  u32		msg_namelen;	/* Length of name		*/
   struct iovec *	msg_iov;	/* Data blocks			*/
   int			msg_iovlen;	/* Number of blocks		*/
   void *		msg_control;	/* Ancillary data		*/
-  socklen_t		msg_controllen;	/* Ancillary data buffer length	*/
+  u32		msg_controllen;	/* Ancillary data buffer length	*/
   int			msg_flags;	/* Received flags on recvmsg	*/
 };
 
 struct cmsghdr
 {
-  socklen_t		cmsg_len;	/* Length of cmsghdr + data	*/
+  u32		cmsg_len;	/* Length of cmsghdr + data	*/
   int			cmsg_level;	/* Protocol			*/
   int			cmsg_type;	/* Protocol type		*/
 };
@@ -173,22 +176,22 @@ struct linger {
 #define SHUT_RDWR 2
 #endif
 
-int     accept(int, struct sockaddr *__restrict__, socklen_t *__restrict__);
-int     bind(int, const struct sockaddr *, socklen_t);
-int     connect(int, const struct sockaddr *, socklen_t);
-int     getpeername(int, struct sockaddr *__restrict__, socklen_t *__restrict__);
-int     getsockname(int, struct sockaddr *__restrict__, socklen_t *__restrict__);
-int     getsockopt(int, int, int, void *__restrict__, socklen_t *__restrict__);
+int     accept(int, struct sockaddr *__restrict__, u32 *__restrict__);
+int     bind(int, const struct sockaddr *, u32);
+int     connect(int, const struct sockaddr *, u32);
+int     getpeername(int, struct sockaddr *__restrict__, u32 *__restrict__);
+int     getsockname(int, struct sockaddr *__restrict__, u32 *__restrict__);
+int     getsockopt(int, int, int, void *__restrict__, u32 *__restrict__);
 int     listen(int, int);
 ssize_t recv(int, void *, size_t, int);
 ssize_t recvfrom(int, void *__restrict__, size_t, int,
-        struct sockaddr *__restrict__, socklen_t *__restrict__);
+        struct sockaddr *__restrict__, u32 *__restrict__);
 ssize_t recvmsg(int, struct msghdr *, int);
 ssize_t send(int, const void *, size_t, int);
 ssize_t sendmsg(int, const struct msghdr *, int);
 ssize_t sendto(int, const void *, size_t, int, const struct sockaddr *,
-        socklen_t);
-int     setsockopt(int, int, int, const void *, socklen_t);
+        u32);
+int     setsockopt(int, int, int, const void *, u32);
 int     close(int);
 int     shutdown(int, int);
 int     socket(int, int, int);

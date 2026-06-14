@@ -303,7 +303,7 @@ bool connect_proxy(HTTP_INFO *httpinfo, char *host, char *username, char *passwo
     return false;
 }
 
-int connect(char *host, u16 port)
+int https_connect_host(char *host, u16 port)
 {
     struct sockaddr_in sin;
     s32 sock, ret;
@@ -371,9 +371,9 @@ void downloadfile(const char *url, struct download *buffer)
     strlcpy(host, url + 7 + httpinfo.use_https, domainlength + 1);
     // Start connecting
     if (getProxyAddress() && getProxyPort() > 0)
-        httpinfo.sock = connect(getProxyAddress(), getProxyPort());
+        httpinfo.sock = https_connect_host(getProxyAddress(), getProxyPort());
     else
-        httpinfo.sock = connect(host, httpinfo.use_https ? 443 : 80);
+        httpinfo.sock = https_connect_host(host, httpinfo.use_https ? 443 : 80);
 
     if (httpinfo.sock < 0)
     {
