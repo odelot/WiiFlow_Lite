@@ -44,9 +44,19 @@ bool RA_EXI_Probe(void);
  *
  * @param game_id     6-byte Wii disc ID from disc header (e.g. "RSBE01")
  * @param timeout_ms  Maximum wait time in milliseconds (0 = 30 000)
+ * @param md5_hex     RA hash (32 lowercase hex chars) computed on-console
+ *                    by RA_ComputeWiiHash, or NULL → ESP falls back to
+ *                    its game-ID table
  * @return            true on success, false on error or timeout
  */
-bool RA_EXI_LoadGame(const char *game_id, u32 timeout_ms);
+bool RA_EXI_LoadGame(const char *game_id, u32 timeout_ms, const char *md5_hex);
+
+/**
+ * Append one line to sd:/ra_exi_debug.txt — field diagnostics without a
+ * USB Gecko. Must be called while the SD card is still mounted (i.e.
+ * before WiiFlow_ExternalBooter / ShutdownBeforeExit).
+ */
+void RA_EXI_Log(const char *msg);
 
 #ifdef __cplusplus
 }
