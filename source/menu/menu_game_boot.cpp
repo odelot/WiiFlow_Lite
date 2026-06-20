@@ -1106,6 +1106,16 @@ void CMenu::_launchWii(dir_discHdr *hdr, bool dvd, bool disc_cfg)
 		if (RA_EXI_Probe())
 		{
 			ra_active = true;
+			/* Start the WiiFlow wait animation BEFORE the slow RA work so
+			 * the user gets visual feedback instead of a frozen coverflow.
+			 * Computing the disc MD5 (many MB of disc reads) and waiting
+			 * for the ESP32 to fetch the achievement list (poll up to 90s)
+			 * both block this thread for several seconds. The animation
+			 * runs on its own HIGHEST-priority thread, so it keeps spinning
+			 * while we block here; _launchShutdown() below restarts the
+			 * same animation seamlessly. */
+			if(!m_directLaunch)
+				_showWaitMessage();
 			/* Compute the RA hash on-console (rcheevos rc_hash_wii_disc
 			 * port — same MD5 Dolphin produces) so ANY game RA knows is
 			 * identified. Works for WBFS/.wbfs/.iso images AND physical
