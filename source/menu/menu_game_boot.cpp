@@ -1124,7 +1124,19 @@ void CMenu::_launchWii(dir_discHdr *hdr, bool dvd, bool disc_cfg)
 			 * seconds of reads during the load screen. */
 			char ra_md5[33];
 			ra_md5[0] = '\0';
+			/* RA_ComputeWiiHash → WBFS_OpenDisc needs the WBFS device
+			 * open. The real boot below doesn't open it until ~line 1353,
+			 * so open/close it here just for the hash (same pattern as
+			 * GetRequestedGameIOS). Without this, WBFS_OpenDisc returns
+			 * NULL for any SD/USB file game and the hash silently fails,
+			 * forcing the ESP32 game-ID table fallback. Skip for physical
+			 * discs (empty path → raw DVD read path inside the hash). */
+			bool ra_wbfs_opened = (hdr->path[0] != '\0');
+			if (ra_wbfs_opened)
+				DeviceHandle.OpenWBFS(currentPartition);
 			RA_ComputeWiiHash((const u8 *)hdr->id, hdr->path, ra_md5);
+			if (ra_wbfs_opened)
+				WBFS_Close();
 			RA_EXI_LoadGame(ra_game_id, 90000,
 			                ra_md5[0] ? ra_md5 : NULL);  // 90s — ESP32 fetch/parse time
 		}
