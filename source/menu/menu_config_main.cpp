@@ -1,8 +1,9 @@
 
 #include <algorithm>
 #include "menu.hpp"
+#include "retroachievements/ra_exi.h"
 
-u8 mainCfg_Pages = 14;
+u8 mainCfg_Pages = 15;
 u8 mainCfg_curPage = 1;
 
 template <class T> static inline T loopNum(T i, T s)
@@ -401,7 +402,7 @@ void CMenu::_showConfigMain()
 		m_btnMgr.setText(m_configLbl4, _t("cfg724", L"Lock coverflow layouts"));
 		m_btnMgr.setText(m_configBtn4, m_cfg.getBool("general", "cf_locked") ? _t("yes", L"Yes") : _t("no", L"No"));
 	}
-	else // page 14
+	else if(mainCfg_curPage == 14)
 	{
 		m_btnMgr.show(m_configBtn1);
 		m_btnMgr.show(m_configBtn2);
@@ -421,6 +422,17 @@ void CMenu::_showConfigMain()
 		m_btnMgr.setText(m_configLbl4, _t("cfgg65", L"Video Width"));
 		i = min(max(0, m_cfg.getInt("GENERAL", "video_width", 0)), (int)ARRAY_SIZE(CMenu::_GlobalVideoWidths) - 1);
 		m_btnMgr.setText(m_configLbl4Val, _t(CMenu::_GlobalVideoWidths[i].id, CMenu::_GlobalVideoWidths[i].text));
+	}
+	else // page 15 — RetroAchievements adapter
+	{
+		m_btnMgr.show(m_configBtn1);
+		m_btnMgr.setText(m_configLbl1, _t("cfgra1", L"Reset adapter WiFi & RA login"));
+		m_btnMgr.setText(m_configBtn1, _t("cfgc5", L"Go"));
+		/* This page uses only line 1 — clear the always-shown labels 2-4 so
+		 * stale text from the previous page doesn't linger. */
+		m_btnMgr.setText(m_configLbl2, L"");
+		m_btnMgr.setText(m_configLbl3, L"");
+		m_btnMgr.setText(m_configLbl4, L"");
 	}
 }
 
@@ -972,6 +984,21 @@ void CMenu::_configMain(void)
 					m_cfg.setInt("GENERAL", "video_width", loopNum(m_cfg.getUInt("GENERAL", "video_width") + direction, ARRAY_SIZE(CMenu::_GlobalVideoWidths)));
 					int val = m_cfg.getInt("GENERAL", "video_width");
 					m_btnMgr.setText(m_configLbl4Val, _t(CMenu::_GlobalVideoWidths[val].id, CMenu::_GlobalVideoWidths[val].text));
+				}
+			}
+			if(mainCfg_curPage == 15)
+			{
+				if(m_btnMgr.selected(m_configBtn1))
+				{
+					// Tell the ESP32 adapter to forget its stored WiFi + RA
+					// credentials and reboot into the config portal. Software
+					// replacement for the nes-ra-adapter memory-card button.
+					_hideConfigMain();
+					if(RA_EXI_ResetCredentials())
+						_error(_t("cfgra2", L"Adapter credentials cleared. It is rebooting — connect to the 'WII_RA_ADAPTER' WiFi and open http://192.168.1.1 to set them again."));
+					else
+						_error(_t("cfgra3", L"RetroAchievements adapter not detected. Check the connection and try again."));
+					_showConfigMain();
 				}
 			}
 		}

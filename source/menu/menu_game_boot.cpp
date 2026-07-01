@@ -1144,6 +1144,7 @@ void CMenu::_launchWii(dir_discHdr *hdr, bool dvd, bool disc_cfg)
 
 	/* clear coverflow, start wiiflow wait animation, set exit handler */
 	_launchShutdown();
+	if(ra_active) RA_EXI_Log("[WF] A: post RA-load / shutdown");
 	string id(hdr->id);
 	string path(hdr->path);// empty if a dvd
 	m_gcfg1.setInt("PLAYCOUNT", id, m_gcfg1.getInt("PLAYCOUNT", id, 0) + 1);
@@ -1225,7 +1226,8 @@ void CMenu::_launchWii(dir_discHdr *hdr, bool dvd, bool disc_cfg)
 
 	int userIOS = m_gcfg2.getInt(id, "ios", 0);
 	int gameIOS = dvd ? userIOS : GetRequestedGameIOS(hdr);
-	
+	if(ra_active) RA_EXI_Log(fmt("[WF] B: GetRequestedGameIOS done gameIOS=%d userIOS=%d", gameIOS, userIOS));
+
 	setLanguage(language);
 
 	/* emunand gamesave setup if necessary */
@@ -1313,6 +1315,7 @@ void CMenu::_launchWii(dir_discHdr *hdr, bool dvd, bool disc_cfg)
 	m_gcfg2.save(true);
 	m_cat.save(true);
 	m_cfg.save(true);
+	if(ra_active) RA_EXI_Log("[WF] C: configs saved, pre-loadGameIOS");
 
 	/* load external booter bin files */
 	if(ExternalBooter_LoadBins(m_binsDir.c_str()) == false)
@@ -1328,6 +1331,7 @@ void CMenu::_launchWii(dir_discHdr *hdr, bool dvd, bool disc_cfg)
 		/* error message already shown */
 		return;
 	}
+	if(ra_active) RA_EXI_Log(fmt("[WF] D: _loadGameIOS done, CurrentIOS=%d", CurrentIOS.Version));
 
 	/* if d2x cios patch returnto and enable emu nand */
 	/* hermes cios can be used for wii games but does not have nand emulation support */
@@ -1355,21 +1359,26 @@ void CMenu::_launchWii(dir_discHdr *hdr, bool dvd, bool disc_cfg)
 		}
 	}
 	
+	if(ra_active) RA_EXI_Log("[WF] D2: post-D2X block, pre-cleanup");
 	/* no more error msgs - clear btns and snds  and stop wait animation */
 	cleanup();
+	if(ra_active) RA_EXI_Log("[WF] D3: cleanup done, pre-OpenWBFS");
 
 	/* handle frag_list for .wbfs files only */
 	bool wbfs_partition = false;
 	if(!dvd)
 	{
 		DeviceHandle.OpenWBFS(currentPartition);
+		if(ra_active) RA_EXI_Log("[WF] D4: OpenWBFS done, pre-GetFSType");
 		wbfs_partition = (DeviceHandle.GetFSType(currentPartition) == PART_FS_WBFS);// if USB device formatted to WBFS
+		if(ra_active) RA_EXI_Log(fmt("[WF] E: pre-frag_list wbfs_part=%d part=%d", wbfs_partition ? 1 : 0, currentPartition));
 		/* if not WBFS formatted get fragmented list. */
 		/* if SD card (currentPartition == 0) set sector size to 512 (0x200) */
 		if(!wbfs_partition && get_frag_list((u8 *)id.c_str(), (char*)path.c_str(), currentPartition == 0 ? 0x200 : USBStorage2_GetSectorSize()) < 0)
 			Sys_Exit();// failed to get frag list
 		WBFS_Close();
 	}
+	if(ra_active) RA_EXI_Log("[WF] F: frag_list done, pre-ocarina");
 	
 	/* move cheats for external booter — also runs when RA is active with no
 	 * user cheats, because ocarina_load_code builds a standalone GCT around
@@ -1381,6 +1390,7 @@ void CMenu::_launchWii(dir_discHdr *hdr, bool dvd, bool disc_cfg)
 		if(cheatFile != NULL)
 			MEM2_free(cheatFile);
 	}
+	if(ra_active) RA_EXI_Log(fmt("[WF] G: ocarina done gct=%d", ra_gct_size));
 	
 	/* move gameconfig for external booter */
 	if(gameconfig != NULL)

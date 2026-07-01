@@ -52,6 +52,23 @@ bool RA_EXI_Probe(void);
 bool RA_EXI_LoadGame(const char *game_id, u32 timeout_ms, const char *md5_hex);
 
 /**
+ * Tell the ESP32 to wipe its stored WiFi + RetroAchievements credentials
+ * (saved by WiFiManager / EEPROM) and reboot into its config portal.
+ *
+ * This is the software replacement for the nes-ra-adapter's physical reset
+ * button on the memory card: the user triggers it from WiiFlow's Settings
+ * menu. After this the ESP32 reboots and re-broadcasts the "WII_RA_ADAPTER"
+ * Wi-Fi AP so credentials can be re-entered at http://192.168.1.1.
+ *
+ * Call only while WiiFlow owns the EXI bus (i.e. from a menu, before any
+ * IOS reload — same constraint as RA_EXI_Probe / RA_EXI_LoadGame).
+ *
+ * @return true if the adapter was detected and the reset command was sent.
+ *         The per-transaction response is not checked (the ESP reboots).
+ */
+bool RA_EXI_ResetCredentials(void);
+
+/**
  * Append one line to sd:/ra_exi_debug.txt — field diagnostics without a
  * USB Gecko. Must be called while the SD card is still mounted (i.e.
  * before WiiFlow_ExternalBooter / ShutdownBeforeExit).
