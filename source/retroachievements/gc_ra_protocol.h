@@ -104,6 +104,22 @@ typedef enum {
      * Sent by GC in response to RA_EVT_ADDR_QUERY.
      */
     RA_CMD_ADDR_RESPONSE     = 0x08,
+
+    /**
+     * Send a debug message (ASCII text) to ESP32 — ESP32 logs it via Serial.
+     * Payload format: u8 msg_len, then msg_len bytes of ASCII text.
+     */
+    RA_CMD_DEBUG_LOG         = 0x09,
+
+    /**
+     * Wipe the WiFi + RetroAchievements credentials stored on the ESP32 by
+     * WiFiManager / EEPROM, then reboot the ESP32 into its config portal.
+     * No payload. The response in the same transaction is unreliable (the ESP
+     * reboots shortly after), so the sender should not depend on it.
+     * Replaces the physical "reset button on the memory card" used by the
+     * nes-ra-adapter: WiiFlow triggers it from a Settings menu entry.
+     */
+    RA_CMD_RESET_CREDENTIALS = 0x0A,
 } ra_gc_command_t;
 
 /*
