@@ -7,7 +7,7 @@
  * WiiFlow owns the EXI bus; the ra-module (ARM/Starlet) is not yet running
  * so there is no bus conflict.
  *
- * All EXI transactions: channel 0 (Slot A), device 0, 8 MHz, half-duplex.
+ * All EXI transactions: channel 1 (Slot B), device 0, 8 MHz, half-duplex.
  * Write phase then read phase within the same CS-low window.
  *
  * EXI_Imm() accepts 1-4 bytes per call (libogc constraint). We loop in
@@ -166,6 +166,43 @@ bool RA_EXI_Probe(void)
     }
     ra_log("[RA_EXI] Probe FAILED");
     return false;
+}
+
+bool RA_EXI_ResetCredentials(void)
+{
+    ra_log("[RA_EXI] ResetCredentials start");
+
+    /* Confirm the adapter is actually there before claiming success — avoids
+     * telling the user "reset sent" when no ESP32 is connected. */
+    if (!RA_EXI_Probe()) {
+        ra_log("[RA_EXI] ResetCredentials: adapter not detected");
+        return false;
+    }
+
+    ra_gc_header_t hdr;
+    hdr.magic       = RA_MAGIC_GC_TO_ESP;
+    hdr.command     = RA_CMD_RESET_CREDENTIALS;
+    hdr.payload_len = 0;
+
+    /* Send it a few times: the ESP arms its reset flag on the first one it
+     * sees and reboots shortly after, so the response is unreliable — we just
+     * need the command to land on the wire at least once. */
+    s32 rc = -1;
+    for (int i = 0; i < 3; i++) {
+        u8 rx[sizeof(ra_esp_header_t)] = {0};
+        rc = exi_transaction(&hdr, sizeof(hdr), rx, sizeof(rx));
+        if (rc == 0) {
+            u64 wake = ticks_to_millisecs(gettime()) + 30;
+            while (ticks_to_millisecs(gettime()) < wake) ;
+        }
+    }
+
+    if (rc < 0) {
+        ra_log("[RA_EXI] ResetCredentials: send failed");
+        return false;
+    }
+    ra_log("[RA_EXI] ResetCredentials sent — ESP rebooting into portal");
+    return true;
 }
 
 bool RA_EXI_LoadGame(const char *game_id, u32 timeout_ms, const char *md5_hex)
