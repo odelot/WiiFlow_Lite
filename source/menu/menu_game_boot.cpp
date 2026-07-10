@@ -29,6 +29,7 @@
 #include "network/gcard.h"
 #include "retroachievements/ra_exi.h"
 #include "retroachievements/ra_hash.h"
+#include "retroachievements/gc_ra_protocol.h"
 
 static void setLanguage(int l)
 {
@@ -103,6 +104,37 @@ void CMenu::_launchShutdown()
 	if(!m_directLaunch)
 		_showWaitMessage();
 	exitHandler(PRIILOADER_DEF); //Making wiiflow ready to boot something
+}
+
+/* RA_EXI_LoadGame status callback — every adapter status transition becomes
+ * a stage line on screen, so the user can see exactly where the pre-boot
+ * RetroAchievements handshake is (or where it got stuck). Static member so
+ * it converts to a plain C function pointer; uses the global mainMenu. */
+void CMenu::_raBootStatusCB(u8 status)
+{
+	switch (status)
+	{
+		case RA_STATUS_INITIALIZING:
+			mainMenu._raShowStatus(mainMenu._t("ramsg5", L"RetroAchievements: adapter starting up..."));
+			break;
+		case RA_STATUS_WIFI_CONNECTING:
+		case RA_STATUS_WIFI_CONNECTED:
+			mainMenu._raShowStatus(mainMenu._t("ramsg6", L"RetroAchievements: adapter connecting to WiFi..."));
+			break;
+		case RA_STATUS_LOGGING_IN:
+			mainMenu._raShowStatus(mainMenu._t("ramsg7", L"RetroAchievements: logging in..."));
+			break;
+		case RA_STATUS_LOGGED_IN:
+			mainMenu._raShowStatus(mainMenu._t("ramsg8", L"RetroAchievements: sending game to adapter..."));
+			break;
+		case RA_STATUS_LOADING_GAME:
+			mainMenu._raShowStatus(mainMenu._t("ramsg9", L"RetroAchievements: downloading achievement data..."));
+			break;
+		default:
+			/* terminal statuses (GAME_LOADED / errors) are reported through
+			 * RA_EXI_LoadGame's result — nothing to show here */
+			break;
+	}
 }
 
 void CMenu::_launch(const dir_discHdr *hdr)
@@ -1089,57 +1121,102 @@ void CMenu::_launchWii(dir_discHdr *hdr, bool dvd, bool disc_cfg)
 		}
 	}
 
-	/* RetroAchievements: tell the ESP32 adapter which Wii game is loading.
-	 * Covers both disc and USB/WBFS paths — hdr->id is set in both cases.
-	 * Blocks until the adapter reports GAME_LOADED (0x06) or times out.
-	 * Boot proceeds either way — RA is best-effort.
+	/* RetroAchievements: when enabled in Settings, the ESP32 adapter in
+	 * Memory Card slot B is REQUIRED. Every stage is shown on screen and
+	 * any failure ABORTS the boot back to the menu with a specific message
+	 * — no more silently playing without achievements. When disabled, the
+	 * adapter is never touched and the boot proceeds normally.
 	 *
-	 * ra_active is reused below: when the adapter is present we force the
+	 * Covers both disc and USB/WBFS paths — hdr->id is set in both cases.
+	 *
+	 * ra_active is reused below: when the handshake succeeds we force the
 	 * Ocarina VBI hooktype and inject the RA VBlank counter as a C0 cheat
 	 * code (see ocarina_load_code), so the d2x ra-module can fire its
 	 * memory snapshots aligned with the game's vertical retrace. */
 	bool ra_active = false;
+	if (m_cfg.getBool("GENERAL", "retroachievements", false))
 	{
 		char ra_game_id[7];
 		strncpy(ra_game_id, hdr->id, 6);
 		ra_game_id[6] = '\0';
-		if (RA_EXI_Probe())
+
+		/* Our per-stage status renders and the wait-spinner thread must not
+		 * draw at the same time (two GX writers) — make sure the spinner is
+		 * off; _launchShutdown() restarts it once the RA handshake is done. */
+		_hideWaitMessage();
+
+		/* Stage 1 — adapter presence. The RA adapter replaces the memory
+		 * card in slot B; without it there is nothing to track achievements. */
+		_raShowStatus(_t("ramsg1", L"RetroAchievements: detecting adapter..."));
+		if (!RA_EXI_Probe())
 		{
-			ra_active = true;
-			/* Start the WiiFlow wait animation BEFORE the slow RA work so
-			 * the user gets visual feedback instead of a frozen coverflow.
-			 * Computing the disc MD5 (many MB of disc reads) and waiting
-			 * for the ESP32 to fetch the achievement list (poll up to 90s)
-			 * both block this thread for several seconds. The animation
-			 * runs on its own HIGHEST-priority thread, so it keeps spinning
-			 * while we block here; _launchShutdown() below restarts the
-			 * same animation seamlessly. */
-			if(!m_directLaunch)
-				_showWaitMessage();
-			/* Compute the RA hash on-console (rcheevos rc_hash_wii_disc
-			 * port — same MD5 Dolphin produces) so ANY game RA knows is
-			 * identified. Works for WBFS/.wbfs/.iso images AND physical
-			 * discs (raw reads via the disc-ripper path); on any failure
-			 * the ESP falls back to its game-ID table. Costs a few
-			 * seconds of reads during the load screen. */
-			char ra_md5[33];
-			ra_md5[0] = '\0';
-			/* RA_ComputeWiiHash → WBFS_OpenDisc needs the WBFS device
-			 * open. The real boot below doesn't open it until ~line 1353,
-			 * so open/close it here just for the hash (same pattern as
-			 * GetRequestedGameIOS). Without this, WBFS_OpenDisc returns
-			 * NULL for any SD/USB file game and the hash silently fails,
-			 * forcing the ESP32 game-ID table fallback. Skip for physical
-			 * discs (empty path → raw DVD read path inside the hash). */
-			bool ra_wbfs_opened = (hdr->path[0] != '\0');
-			if (ra_wbfs_opened)
-				DeviceHandle.OpenWBFS(currentPartition);
-			RA_ComputeWiiHash((const u8 *)hdr->id, hdr->path, ra_md5);
-			if (ra_wbfs_opened)
-				WBFS_Close();
-			RA_EXI_LoadGame(ra_game_id, 90000,
-			                ra_md5[0] ? ra_md5 : NULL);  // 90s — ESP32 fetch/parse time
+			_error(_t("raerr1", L"RetroAchievements adapter not detected in Memory Card slot B!\n\nBoot canceled. Check the adapter connection, or disable RetroAchievements in Settings."));
+			return;
 		}
+		ra_active = true;
+
+		/* Stage 2 — compute the RA hash on-console (rcheevos
+		 * rc_hash_wii_disc port — same MD5 Dolphin produces) so ANY game RA
+		 * knows is identified. Works for WBFS/.wbfs/.iso images AND
+		 * physical discs (raw reads via the disc-ripper path). Costs a few
+		 * seconds of reads.
+		 * RA_ComputeWiiHash → WBFS_OpenDisc needs the WBFS device open. The
+		 * real boot below doesn't open it until after the IOS reload, so
+		 * open/close it here just for the hash (same pattern as
+		 * GetRequestedGameIOS). Skip for physical discs (empty path → raw
+		 * DVD read path inside the hash). */
+		_raShowStatus(_t("ramsg2", L"RetroAchievements: computing game hash..."));
+		char ra_md5[33];
+		ra_md5[0] = '\0';
+		bool ra_wbfs_opened = (hdr->path[0] != '\0');
+		if (ra_wbfs_opened)
+			DeviceHandle.OpenWBFS(currentPartition);
+		RA_ComputeWiiHash((const u8 *)hdr->id, hdr->path, ra_md5);
+		if (ra_wbfs_opened)
+			WBFS_Close();
+		if (ra_md5[0] == '\0')
+		{
+			_error(_t("raerr2", L"RetroAchievements: could not compute the game hash (image read failed).\n\nBoot canceled — the game cannot be identified."));
+			return;
+		}
+
+		/* Stage 3 — hand the hash to the adapter and wait while it logs in
+		 * and downloads the achievement set. _raBootStatusCB turns every
+		 * adapter status transition into on-screen text. */
+		_raShowStatus(_t("ramsg3", L"RetroAchievements: contacting adapter..."));
+		ra_load_result_t res = RA_EXI_LoadGame(ra_game_id, 90000, ra_md5,
+		                                       CMenu::_raBootStatusCB);  // 90s — ESP32 fetch/parse time
+		if (res != RA_LOAD_OK)
+		{
+			wstringEx msg;
+			switch (res)
+			{
+				case RA_LOAD_ERR_BUS:
+					msg = _t("raerr3", L"RetroAchievements adapter stopped responding on the EXI bus.\n\nBoot canceled. Check the adapter connection and try again.");
+					break;
+				case RA_LOAD_ERR_NOT_CONFIGURED:
+					msg = _t("raerr4", L"RetroAchievements adapter has no WiFi/RA credentials.\n\nBoot canceled. Connect to the 'WII_RA_ADAPTER' WiFi network and open http://192.168.1.1 to configure it.");
+					break;
+				case RA_LOAD_ERR_WIFI:
+					msg = _t("raerr5", L"RetroAchievements adapter has no internet connection.\n\nBoot canceled. Check your WiFi router and try again.");
+					break;
+				case RA_LOAD_ERR_LOGIN:
+					msg = _t("raerr6", L"RetroAchievements login failed — the stored credentials were rejected.\n\nBoot canceled. Use 'Reset adapter WiFi & RA login' in Settings and configure the adapter again.");
+					break;
+				case RA_LOAD_ERR_UNKNOWN_GAME:
+					msg = _t("raerr7", L"This game's hash is not in the RetroAchievements database — probably a bad dump or an unsupported version.\n\nBoot canceled. Verify your game image (e.g. redump) and try again.");
+					break;
+				case RA_LOAD_ERR_TIMEOUT:
+					msg = _t("raerr8", L"RetroAchievements adapter took too long to load the achievement data.\n\nBoot canceled. Check your internet connection and try again.");
+					break;
+				default:
+					msg = _t("raerr9", L"RetroAchievements: the adapter reported an error while loading the achievement data.\n\nBoot canceled. Try again, or disable RetroAchievements in Settings.");
+					break;
+			}
+			_error(msg);
+			return;
+		}
+		_raShowStatus(_t("ramsg4", L"RetroAchievements: achievements loaded!"));
 	}
 
 	/* clear coverflow, start wiiflow wait animation, set exit handler */

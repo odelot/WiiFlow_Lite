@@ -481,7 +481,10 @@ bool CMenu::init(bool usb_mounted)
 	/* Init Button Manager and build the menus */
 	_buildMenus();
 
-	RA_EXI_Probe();
+	/* Early RetroAchievements adapter probe (wakes the EXI link so the boot
+	 * -time probe is warm). Skipped when RA is disabled — no EXI traffic. */
+	if(m_cfg.getBool("GENERAL", "retroachievements", false))
+		RA_EXI_Probe();
 
 	return true;
 }

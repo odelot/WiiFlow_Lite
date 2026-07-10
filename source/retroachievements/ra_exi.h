@@ -32,13 +32,42 @@ extern "C" {
 bool RA_EXI_Probe(void);
 
 /**
- * Send a game ID to the ESP32 and wait for it to finish loading the
- * achievement data from RetroAchievements servers.
+ * Result of the pre-boot LOAD_GAME handshake. Anything but RA_LOAD_OK
+ * aborts the boot when RetroAchievements is enabled — each value maps to
+ * a specific user-facing message in menu_game_boot.cpp.
+ */
+typedef enum {
+    RA_LOAD_OK = 0,
+    RA_LOAD_ERR_BUS,            /* EXI bus never answered (adapter unplugged mid-way / wiring) */
+    RA_LOAD_ERR_TIMEOUT,        /* adapter alive but never reached a terminal status */
+    RA_LOAD_ERR_NOT_CONFIGURED, /* adapter is in its WiFi config portal (no credentials) */
+    RA_LOAD_ERR_WIFI,           /* adapter can't connect to WiFi / reach the internet */
+    RA_LOAD_ERR_LOGIN,          /* RetroAchievements rejected the stored credentials */
+    RA_LOAD_ERR_UNKNOWN_GAME,   /* hash not in the RA database — bad dump / unsupported version */
+    RA_LOAD_ERR_GAME,           /* other game-load failure (RA server/API error) */
+    RA_LOAD_ERR_PROTOCOL,       /* malformed exchange */
+} ra_load_result_t;
+
+/**
+ * Called whenever the adapter's reported status byte changes while
+ * RA_EXI_LoadGame is waiting (values: ra_status_t in gc_ra_protocol.h),
+ * so the UI can show what the adapter is doing. May be NULL.
+ */
+typedef void (*ra_exi_status_cb_t)(u8 esp_status);
+
+/**
+ * Send a game ID + RA hash to the ESP32 and wait for it to finish loading
+ * the achievement data from the RetroAchievements servers.
  *
- * Blocks until:
- *   - ESP32 status == RA_STATUS_GAME_LOADED (0x06) → returns true
- *   - ESP32 status >= 0xE0 (error codes)           → returns false
- *   - timeout_ms elapsed                           → returns false
+ * Two phases within the same deadline:
+ *   1. Wait until the adapter is ready (status >= LOGGED_IN — it may still
+ *      be joining WiFi or logging in right after power-on). If it reports
+ *      the config portal, fail immediately with RA_LOAD_ERR_NOT_CONFIGURED.
+ *   2. Send LOAD_GAME, then poll until GAME_LOADED (success) or an error
+ *      status (0xE0+, mapped to the matching ra_load_result_t).
+ *
+ * On timeout the last observed status refines the result (stuck joining
+ * WiFi → RA_LOAD_ERR_WIFI, stuck logging in → RA_LOAD_ERR_LOGIN, …).
  *
  * Typical wait: 5-20 seconds (depends on Wi-Fi + RA API response time).
  *
@@ -47,9 +76,11 @@ bool RA_EXI_Probe(void);
  * @param md5_hex     RA hash (32 lowercase hex chars) computed on-console
  *                    by RA_ComputeWiiHash, or NULL → ESP falls back to
  *                    its game-ID table
- * @return            true on success, false on error or timeout
+ * @param status_cb   Optional UI callback for status transitions
+ * @return            RA_LOAD_OK on success, specific error otherwise
  */
-bool RA_EXI_LoadGame(const char *game_id, u32 timeout_ms, const char *md5_hex);
+ra_load_result_t RA_EXI_LoadGame(const char *game_id, u32 timeout_ms,
+                                 const char *md5_hex, ra_exi_status_cb_t status_cb);
 
 /**
  * Tell the ESP32 to wipe its stored WiFi + RetroAchievements credentials

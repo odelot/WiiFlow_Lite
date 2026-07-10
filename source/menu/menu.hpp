@@ -43,6 +43,11 @@ public: // functions called from outside CMenu
 	bool init(bool usb_mounted);
 	int main(void);
 	void directlaunch(const char *GameID);
+
+	/* RetroAchievements pre-boot status line (menu_error.cpp). Public so the
+	 * C status callback in menu_game_boot.cpp can reach it via mainMenu. */
+	void _raShowStatus(const wstringEx &msg);
+	void _raHideStatus(void);
 	
 	const char *getBoxPath(const dir_discHdr *element);
 	const char *getFrontPath(const dir_discHdr *element);
@@ -1006,6 +1011,9 @@ private:
 	void _launchGC(dir_discHdr *hdr, bool disc);
 	void _launchPlugin(dir_discHdr *hdr);
 	void _launchShutdown();
+	/* Status callback for RA_EXI_LoadGame — static so it can be passed as a
+	 * plain C function pointer; maps adapter status bytes to stage text. */
+	static void _raBootStatusCB(u8 status);
 	vector<string> _getMetaXML(const char *bootpath);
 	int _loadGameIOS(u8 ios, int userIOS, const char *id, bool RealNAND_Channels = false);
 	bool _loadFile(u8 * &buffer, u32 &size, const char *path, const char *file);// gameconfig.txt and cheats.gct
