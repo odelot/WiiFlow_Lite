@@ -426,11 +426,13 @@ void CMenu::_showConfigMain()
 	else // page 15 — RetroAchievements adapter
 	{
 		m_btnMgr.show(m_configBtn1);
-		m_btnMgr.setText(m_configLbl1, _t("cfgra1", L"Reset adapter WiFi & RA login"));
-		m_btnMgr.setText(m_configBtn1, _t("cfgc5", L"Go"));
-		/* This page uses only line 1 — clear the always-shown labels 2-4 so
-		 * stale text from the previous page doesn't linger. */
-		m_btnMgr.setText(m_configLbl2, L"");
+		m_btnMgr.show(m_configBtn2);
+		m_btnMgr.setText(m_configLbl1, _t("cfgra4", L"RetroAchievements"));
+		m_btnMgr.setText(m_configBtn1, m_cfg.getBool("GENERAL", "retroachievements", false) ? _t("on", L"On") : _t("off", L"Off"));
+		m_btnMgr.setText(m_configLbl2, _t("cfgra1", L"Reset adapter WiFi & RA login"));
+		m_btnMgr.setText(m_configBtn2, _t("cfgc5", L"Go"));
+		/* This page uses only lines 1-2 — clear the always-shown labels 3-4
+		 * so stale text from the previous page doesn't linger. */
 		m_btnMgr.setText(m_configLbl3, L"");
 		m_btnMgr.setText(m_configLbl4, L"");
 	}
@@ -989,6 +991,15 @@ void CMenu::_configMain(void)
 			if(mainCfg_curPage == 15)
 			{
 				if(m_btnMgr.selected(m_configBtn1))
+				{
+					// Master switch. On = the adapter is REQUIRED at game
+					// boot (any failure aborts with a message); Off = the
+					// adapter is never touched, games boot without RA.
+					bool val = !m_cfg.getBool("GENERAL", "retroachievements", false);
+					m_cfg.setBool("GENERAL", "retroachievements", val);
+					m_btnMgr.setText(m_configBtn1, val ? _t("on", L"On") : _t("off", L"Off"));
+				}
+				else if(m_btnMgr.selected(m_configBtn2))
 				{
 					// Tell the ESP32 adapter to forget its stored WiFi + RA
 					// credentials and reboot into the config portal. Software

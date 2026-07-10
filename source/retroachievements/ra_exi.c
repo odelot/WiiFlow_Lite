@@ -205,10 +205,101 @@ bool RA_EXI_ResetCredentials(void)
     return true;
 }
 
-bool RA_EXI_LoadGame(const char *game_id, u32 timeout_ms, const char *md5_hex)
+/* One POLL transaction. Returns 0 and fills *status on a valid response,
+ * -1 on bus failure, -2 on bad magic (ESP not answering coherently). */
+static s32 ra_poll_status(u8 *status)
 {
-    if (!game_id || game_id[0] == '\0') return false;
+    ra_gc_header_t poll_hdr;
+    poll_hdr.magic       = RA_MAGIC_GC_TO_ESP;
+    poll_hdr.command     = RA_CMD_POLL;
+    poll_hdr.payload_len = 0;
+
+    u8 prx[sizeof(ra_esp_header_t)] = {0};
+    if (exi_transaction(&poll_hdr, sizeof(poll_hdr), prx, sizeof(prx)) < 0)
+        return -1;
+    const ra_esp_header_t *r = (const ra_esp_header_t *)prx;
+    if (r->magic != RA_MAGIC_ESP_TO_GC)
+        return -2;
+    *status = r->status;
+    return 0;
+}
+
+/* Busy-wait (pre-boot, single-threaded) between polls. */
+static void ra_poll_delay(void)
+{
+    u64 wake = ticks_to_millisecs(gettime()) + RA_POLL_INTERVAL_MS;
+    while (ticks_to_millisecs(gettime()) < wake)
+        ;
+}
+
+static ra_load_result_t ra_map_error_status(u8 status)
+{
+    switch (status) {
+        case RA_STATUS_ERROR_WIFI:         return RA_LOAD_ERR_WIFI;
+        case RA_STATUS_ERROR_LOGIN:        return RA_LOAD_ERR_LOGIN;
+        case RA_STATUS_ERROR_UNKNOWN_GAME: return RA_LOAD_ERR_UNKNOWN_GAME;
+        case RA_STATUS_ERROR_PROTOCOL:     return RA_LOAD_ERR_PROTOCOL;
+        default:                           return RA_LOAD_ERR_GAME;
+    }
+}
+
+/* When the deadline expires, the last status the adapter reported tells us
+ * WHAT it was stuck on — turn that into the most specific result we can. */
+static ra_load_result_t ra_map_timeout(u8 last_status, bool got_any_response)
+{
+    if (!got_any_response)
+        return RA_LOAD_ERR_BUS;
+    switch (last_status) {
+        case RA_STATUS_INITIALIZING:
+        case RA_STATUS_WIFI_CONNECTING:
+        case RA_STATUS_WIFI_CONNECTED:  return RA_LOAD_ERR_WIFI;
+        case RA_STATUS_LOGGING_IN:      return RA_LOAD_ERR_LOGIN;
+        case RA_STATUS_PORTAL:          return RA_LOAD_ERR_NOT_CONFIGURED;
+        default:                        return RA_LOAD_ERR_TIMEOUT;
+    }
+}
+
+ra_load_result_t RA_EXI_LoadGame(const char *game_id, u32 timeout_ms,
+                                 const char *md5_hex, ra_exi_status_cb_t status_cb)
+{
+    if (!game_id || game_id[0] == '\0') return RA_LOAD_ERR_PROTOCOL;
     if (timeout_ms == 0) timeout_ms = RA_DEFAULT_TIMEOUT_MS;
+
+    u64 deadline_ms = ticks_to_millisecs(gettime()) + (u64)timeout_ms;
+    u8  last_status = 0xFF;          /* impossible value — forces first cb/log */
+    bool got_any_response = false;
+
+    /* ---------- 0. Wait until the adapter is READY for LOAD_GAME ----------
+     * Right after power-on the ESP32 may still be joining WiFi or logging
+     * in (status 0x00-0x03) — a LOAD_GAME sent now would be rejected. Wait
+     * for LOGGED_IN or beyond. Old error states (0xE0+) also pass: sending
+     * LOAD_GAME is exactly how a new attempt resets them. The config portal
+     * never resolves by waiting, so fail it immediately. */
+    while (ticks_to_millisecs(gettime()) < deadline_ms) {
+        u8 status;
+        s32 rc = ra_poll_status(&status);
+        if (rc == 0) {
+            got_any_response = true;
+            if (status != last_status) {
+                char lbuf[64];
+                snprintf(lbuf, sizeof(lbuf), "[RA_EXI] pre-load status=%02X", status);
+                ra_log(lbuf);
+                last_status = status;
+                if (status_cb) status_cb(status);
+            }
+            if (status == RA_STATUS_PORTAL) {
+                ra_log("[RA_EXI] adapter in config portal — not configured");
+                return RA_LOAD_ERR_NOT_CONFIGURED;
+            }
+            if (status >= RA_STATUS_LOGGED_IN)
+                break;                    /* ready (incl. stale error states) */
+        }
+        ra_poll_delay();
+    }
+    if (ticks_to_millisecs(gettime()) >= deadline_ms) {
+        ra_log("[RA_EXI] timed out waiting for adapter to be ready");
+        return ra_map_timeout(last_status, got_any_response);
+    }
 
     /* ---------- 1. Send LOAD_GAME ---------- */
     /* Mirrors ra_load_game_t in gc_ra_protocol.h. md5_hex (32 lowercase
@@ -245,57 +336,47 @@ bool RA_EXI_LoadGame(const char *game_id, u32 timeout_ms, const char *md5_hex)
      * Don't check magic/status here — proceed directly to polling, which
      * IS the authoritative status channel. */
     if (exi_transaction(&tx, sizeof(tx), rx6, sizeof(rx6)) < 0)
-        return false;
+        return RA_LOAD_ERR_BUS;
     ra_log("[RA_EXI] LOAD_GAME sent, polling for GAME_LOADED");
 
-    /* ---------- 2. Poll until GAME_LOADED (0x06) or error ---------- */
-    ra_gc_header_t poll_hdr;
-    poll_hdr.magic       = RA_MAGIC_GC_TO_ESP;
-    poll_hdr.command     = RA_CMD_POLL;
-    poll_hdr.payload_len = 0;
-
-    u64 deadline_ms = ticks_to_millisecs(gettime()) + (u64)timeout_ms;
-    u8 last_logged_status = 0xFF;  /* impossible value to force first log */
-    u32 poll_count = 0;
+    /* ---------- 2. Poll until GAME_LOADED (0x06) or error ----------
+     * The EXI servicer on the ESP processes commands strictly in order, so
+     * the first POLL answered after LOAD_GAME already reflects the new
+     * attempt (LOADING_GAME / an error) — never a stale terminal status. */
+    last_status = 0xFF;
     while (ticks_to_millisecs(gettime()) < deadline_ms) {
-        /* ~300ms busy-wait between polls — OK pre-boot (single-threaded). */
-        u64 wake = ticks_to_millisecs(gettime()) + RA_POLL_INTERVAL_MS;
-        while (ticks_to_millisecs(gettime()) < wake)
-            ;
+        ra_poll_delay();   /* ~300ms busy-wait — OK pre-boot (single-threaded) */
 
-        u8 prx[sizeof(ra_esp_header_t)] = {0};
-        if (exi_transaction(&poll_hdr, sizeof(poll_hdr), prx, sizeof(prx)) < 0)
+        u8 status;
+        s32 rc = ra_poll_status(&status);
+        if (rc == -1)
             continue;   /* bus glitch, keep trying */
+        if (rc == -2)
+            continue;   /* bad magic — ESP mid-response, keep trying */
 
-        poll_count++;
-        const ra_esp_header_t *r = (const ra_esp_header_t *)prx;
-        if (r->magic != RA_MAGIC_ESP_TO_GC) {
-            if ((poll_count % 10) == 1) {
-                char lbuf[80];
-                snprintf(lbuf, sizeof(lbuf), "[RA_EXI] poll %lu: bad magic %02X", (unsigned long)poll_count, r->magic);
-                ra_log(lbuf);
-            }
-            continue;
-        }
-
-        u8 status = r->status;
-        if (status != last_logged_status) {
+        got_any_response = true;
+        if (status != last_status) {
             char lbuf[80];
-            snprintf(lbuf, sizeof(lbuf), "[RA_EXI] poll %lu: status=%02X", (unsigned long)poll_count, status);
+            snprintf(lbuf, sizeof(lbuf), "[RA_EXI] poll: status=%02X", status);
             ra_log(lbuf);
-            last_logged_status = status;
+            last_status = status;
+            if (status_cb) status_cb(status);
         }
         if (status == RA_STATUS_GAME_LOADED || status == RA_STATUS_ACTIVE) {
             ra_log("[RA_EXI] GAME_LOADED — proceeding with boot");
-            return true;
+            return RA_LOAD_OK;
         }
-        if (status >= RA_STATUS_ERROR_WIFI) {
-            ra_log("[RA_EXI] ESP32 reported error — aborting");
-            return false;
+        if (status == RA_STATUS_PORTAL)
+            return RA_LOAD_ERR_NOT_CONFIGURED;
+        if (RA_STATUS_IS_ERROR(status)) {
+            char lbuf[80];
+            snprintf(lbuf, sizeof(lbuf), "[RA_EXI] ESP32 reported error %02X — aborting", status);
+            ra_log(lbuf);
+            return ra_map_error_status(status);
         }
         /* RA_STATUS_LOADING_GAME (0x05) or anything else: keep waiting */
     }
 
     ra_log("[RA_EXI] LoadGame timed out");
-    return false; /* timeout */
+    return ra_map_timeout(last_status, got_any_response);
 }
