@@ -1168,9 +1168,23 @@ void CMenu::_launchWii(dir_discHdr *hdr, bool dvd, bool disc_cfg)
 		_raShowStatus(_t("ramsg2", L"RetroAchievements: computing game hash..."));
 		char ra_md5[33];
 		ra_md5[0] = '\0';
+		/* currentPartition is a
+		 * global read from the WII_DOMAIN config and can disagree with the
+		 * game's own path, which leads to OpenWBFS() returning `-1`.
+		 * This is why everywhere else in the code OpenWBFS is best effort.
+		 */
 		bool ra_wbfs_opened = (hdr->path[0] != '\0');
 		if (ra_wbfs_opened)
-			DeviceHandle.OpenWBFS(currentPartition);
+		{
+			int ra_dev = DeviceHandle.PathToDriveType(hdr->path);
+			if (ra_dev < 0)
+				ra_dev = currentPartition;
+			s32 ra_ow = DeviceHandle.OpenWBFS(ra_dev);
+			RA_EXI_Log(fmt("[RA_HASH] OpenWBFS dev=%d cur=%d ret=%d ins=%d fs=%d",
+					ra_dev, currentPartition, ra_ow,
+					DeviceHandle.IsInserted(ra_dev) ? 1 : 0,
+					DeviceHandle.GetFSType(ra_dev)));
+		}
 		RA_ComputeWiiHash((const u8 *)hdr->id, hdr->path, ra_md5);
 		if (ra_wbfs_opened)
 			WBFS_Close();
@@ -1445,14 +1459,22 @@ void CMenu::_launchWii(dir_discHdr *hdr, bool dvd, bool disc_cfg)
 	bool wbfs_partition = false;
 	if(!dvd)
 	{
-		DeviceHandle.OpenWBFS(currentPartition);
+		int game_dev = DeviceHandle.PathToDriveType(path.c_str());
+		if(game_dev < 0)
+			game_dev = currentPartition;
+		DeviceHandle.OpenWBFS(game_dev);
 		if(ra_active) RA_EXI_Log("[WF] D4: OpenWBFS done, pre-GetFSType");
-		wbfs_partition = (DeviceHandle.GetFSType(currentPartition) == PART_FS_WBFS);// if USB device formatted to WBFS
-		if(ra_active) RA_EXI_Log(fmt("[WF] E: pre-frag_list wbfs_part=%d part=%d", wbfs_partition ? 1 : 0, currentPartition));
+		wbfs_partition = (DeviceHandle.GetFSType(game_dev) == PART_FS_WBFS);// if USB device formatted to WBFS
+		if(ra_active) RA_EXI_Log(fmt("[WF] E: pre-frag_list wbfs_part=%d dev=%d part=%d fs=%d", wbfs_partition ? 1 : 0, game_dev, currentPartition, wbfs_part_fs));
 		/* if not WBFS formatted get fragmented list. */
-		/* if SD card (currentPartition == 0) set sector size to 512 (0x200) */
-		if(!wbfs_partition && get_frag_list((u8 *)id.c_str(), (char*)path.c_str(), currentPartition == 0 ? 0x200 : USBStorage2_GetSectorSize()) < 0)
-			Sys_Exit();// failed to get frag list
+		/* if SD card (game_dev == 0) set sector size to 512 (0x200) */
+		if(!wbfs_partition)
+		{
+			int frag_ret = get_frag_list((u8 *)id.c_str(), (char*)path.c_str(), game_dev == 0 ? 0x200 : USBStorage2_GetSectorSize());
+			if(ra_active) RA_EXI_Log(fmt("[WF] E2: get_frag_list ret=%d", frag_ret));
+			if(frag_ret < 0)
+				Sys_Exit();// failed to get frag list
+		}
 		WBFS_Close();
 	}
 	if(ra_active) RA_EXI_Log("[WF] F: frag_list done, pre-ocarina");
