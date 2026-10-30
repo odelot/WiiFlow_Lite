@@ -7,11 +7,13 @@
  * WiiFlow owns the EXI bus; the ra-module (ARM/Starlet) is not yet running.
  *
  * Flow:
- *   1. RA_EXI_Probe()      — check the ESP32 is present on Slot B
+ *   1. RA_EXI_Probe()      — find the adapter: USB port first, then Slot B
  *   2. RA_EXI_LoadGame()   — send disc ID, block until GAME_LOADED or error
  *
- * Uses libogc EXI directly (ogc/exi.h).  All transactions are on
- * EXI channel 1 (Slot B), device 0, 8 MHz, half-duplex (write then read).
+ * Two links, one protocol: the USB adapter (VID:PID 303A:4052, libogc
+ * ogc/usb.h bulk transfers) or the memory-card one (libogc EXI, channel 1 =
+ * Slot B, device 0, 8 MHz, half-duplex write-then-read). The names keep the
+ * historical RA_EXI_ prefix.
  */
 
 #ifndef _RA_EXI_H_
@@ -24,8 +26,9 @@ extern "C" {
 #endif
 
 /**
- * Probe for the Wii-RA-Adapter on EXI Slot B.
- * Sends RA_CMD_IDENTIFY and checks the device ID in the response.
+ * Probe for the Wii-RA-Adapter: on USB first (by VID:PID), else on EXI
+ * Slot B. Sends RA_CMD_IDENTIFY and checks the device ID in the response;
+ * the link that answers is used by every later call.
  *
  * @return true if the adapter is detected and responding
  */

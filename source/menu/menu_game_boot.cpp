@@ -1150,7 +1150,7 @@ void CMenu::_launchWii(dir_discHdr *hdr, bool dvd, bool disc_cfg)
 		_raShowStatus(_t("ramsg1", L"RetroAchievements: detecting adapter..."));
 		if (!RA_EXI_Probe())
 		{
-			_error(_t("raerr1", L"RetroAchievements adapter not detected in Memory Card slot B!\n\nBoot canceled. Check the adapter connection, or disable RetroAchievements in Settings."));
+			_error(_t("raerr1", L"RetroAchievements adapter not detected (USB port or Memory Card slot B)!\n\nBoot canceled. Check the adapter connection, or disable RetroAchievements in Settings."));
 			return;
 		}
 		ra_active = true;
@@ -1206,7 +1206,7 @@ void CMenu::_launchWii(dir_discHdr *hdr, bool dvd, bool disc_cfg)
 			switch (res)
 			{
 				case RA_LOAD_ERR_BUS:
-					msg = _t("raerr3", L"RetroAchievements adapter stopped responding on the EXI bus.\n\nBoot canceled. Check the adapter connection and try again.");
+					msg = _t("raerr3", L"RetroAchievements adapter stopped responding.\n\nBoot canceled. Check the adapter connection and try again.");
 					break;
 				case RA_LOAD_ERR_NOT_CONFIGURED:
 					msg = _t("raerr4", L"RetroAchievements adapter has no WiFi/RA credentials.\n\nBoot canceled. Connect to the 'WII_RA_ADAPTER' WiFi network and open http://192.168.1.1 to configure it.");
