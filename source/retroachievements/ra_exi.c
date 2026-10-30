@@ -16,9 +16,11 @@
 
 #include <gccore.h>
 #include <ogc/exi.h>
+#include <ogc/usb.h>
 #include <ogc/lwp_watchdog.h>
 #include <string.h>
 #include <stdio.h>
+#include <unistd.h>
 
 #include "ra_exi.h"
 #include "gc_ra_protocol.h"
@@ -102,12 +104,236 @@ static s32 exi_transaction(const void *tx, u32 tx_len, void *rx, u32 rx_len)
 }
 
 /* -----------------------------------------------------------------------
+ * USB link — the same adapter firmware built for the USB cable
+ * (CONFIG_RA_LINK_USB): VID:PID 303A:4052, vendor interface, bulk OUT 0x01
+ * + bulk IN 0x81. The RA protocol is unchanged; every request gets exactly
+ * one reply holding the bytes an EXI read would have clocked out, so
+ * usb_transaction() reproduces exi_transaction(): the reply's first tx_len
+ * bytes are what the EXI write phase consumed and are skipped. Framing: no
+ * message is a multiple of 64 bytes (a 0x00 byte is appended), so each one
+ * ends on a short packet. Plan: c:/dev/wii/PLAN-USB-SPIKE.md §11.
+ * ----------------------------------------------------------------------- */
+
+#define RA_USB_VID         0x303A
+#define RA_USB_PID         0x4052
+#define RA_USB_EP_OUT      0x01
+#define RA_USB_EP_IN       0x81
+#define RA_USB_TIMEOUT_MS  500u
+#define RA_USB_LIST_TRIES  5      /* x 100 ms: a fresh USB_Initialize fills the list async */
+
+static s32 g_usb_fd = -1;
+static u8  usb_out[512] ATTRIBUTE_ALIGN(32);
+static u8  usb_in[512]  ATTRIBUTE_ALIGN(32);
+static volatile bool usb_in_done;
+static volatile s32  usb_in_res;
+
+static s32 usb_in_cb(s32 result, void *usrdata)
+{
+    (void)usrdata;
+    usb_in_res = result;
+    usb_in_done = true;
+    return 0;
+}
+
+static void ra_usb_close(void)
+{
+    if (g_usb_fd >= 0)
+        USB_CloseDevice(&g_usb_fd);   /* also cancels a pending reply read */
+    g_usb_fd = -1;
+}
+
+static void ra_usb_configure(s32 fd)
+{
+    u8 conf = 0;
+    /* Same as the USB-storage path: some devices error here, ignore. */
+    USB_GetConfiguration(fd, &conf);
+    if (conf != 1)
+        USB_SetConfiguration(fd, 1);
+}
+
+/* Open the adapter: from the USB device list (USBV5 ven, or USBV0 on IOSes
+ * without it), else straight by VID:PID on /dev/usb/oh0 (device id 0 makes
+ * libogc open "/dev/usb/oh0/303a/4052" — the path the d2x module uses on
+ * bases 38/56/57). Every step goes to sd:/ra_exi_debug.txt. */
+static bool ra_usb_open(void)
+{
+    usb_device_entry list[8];
+    u8 cnt;
+    s32 fd = -1, r;
+    char buf[160];
+    int pos;
+
+    if (g_usb_fd >= 0)
+        return true;
+    r = USB_Initialize();
+    snprintf(buf, sizeof(buf), "[RA_USB] IOS%ld rev %ld USB_Initialize=%ld",
+             (long)IOS_GetVersion(), (long)IOS_GetRevision(), (long)r);
+    ra_log(buf);
+    if (r < 0)
+        return false;
+    for (int tries = 0; tries < RA_USB_LIST_TRIES; tries++) {
+        if (tries > 0)
+            usleep(100000);
+        cnt = 0;
+        memset(list, 0, sizeof(list));
+        r = USB_GetDeviceList(list, 8, 0, &cnt);
+        pos = snprintf(buf, sizeof(buf), "[RA_USB] list try %d: ret=%ld cnt=%u", tries, (long)r, cnt);
+        for (int i = 0; i < cnt && pos < (int)sizeof(buf) - 24; i++)
+            pos += snprintf(buf + pos, sizeof(buf) - pos, " %08lX=%04X:%04X",
+                            (unsigned long)list[i].device_id, list[i].vid, list[i].pid);
+        ra_log(buf);
+        if (r < 0)
+            continue;
+        for (int i = 0; i < cnt; i++) {
+            if (list[i].vid != RA_USB_VID || list[i].pid != RA_USB_PID)
+                continue;
+            r = USB_OpenDevice(list[i].device_id, RA_USB_VID, RA_USB_PID, &fd);
+            if (r < 0) {
+                snprintf(buf, sizeof(buf), "[RA_USB] open failed dev=%08lX ret=%ld",
+                         (unsigned long)list[i].device_id, (long)r);
+                ra_log(buf);
+                break;   /* try the direct oh0 path below */
+            }
+            ra_usb_configure(fd);
+            g_usb_fd = fd;
+            snprintf(buf, sizeof(buf), "[RA_USB] adapter found dev=%08lX fd=%ld",
+                     (unsigned long)list[i].device_id, (long)fd);
+            ra_log(buf);
+            return true;
+        }
+        if (cnt > 0)
+            break;   /* list is populated and the adapter is not in it */
+    }
+
+    r = USB_OpenDevice(USB_OH0_DEVICE_ID, RA_USB_VID, RA_USB_PID, &fd);
+    snprintf(buf, sizeof(buf), "[RA_USB] direct oh0 open ret=%ld fd=%ld", (long)r, (long)fd);
+    ra_log(buf);
+    if (r < 0)
+        return false;
+    ra_usb_configure(fd);
+    g_usb_fd = fd;
+    return true;
+}
+
+static s32 usb_transaction(const void *tx, u32 tx_len, void *rx, u32 rx_len)
+{
+    u32 n = tx_len, copy;
+    u64 deadline;
+    s32 r;
+    char buf[80];
+
+    if (g_usb_fd < 0 && !ra_usb_open())
+        return -1;
+    if (tx_len + 1 > sizeof(usb_out))
+        return -1;
+    memcpy(usb_out, tx, tx_len);
+    if ((n & 63u) == 0)
+        usb_out[n++] = 0;   /* framing pad: end on a short packet */
+
+    /* Reply read first, so it is waiting when the adapter answers. */
+    usb_in_done = false;
+    usb_in_res = -1;
+    r = USB_ReadBlkMsgAsync(g_usb_fd, RA_USB_EP_IN, sizeof(usb_in), usb_in, usb_in_cb, NULL);
+    if (r < 0) {
+        snprintf(buf, sizeof(buf), "[RA_USB] read post failed ret=%ld", (long)r);
+        ra_log(buf);
+        ra_usb_close();
+        return -1;
+    }
+    r = USB_WriteBlkMsg(g_usb_fd, RA_USB_EP_OUT, (u16)n, usb_out);
+    if (r != (s32)n) {
+        snprintf(buf, sizeof(buf), "[RA_USB] write failed ret=%ld (want %lu)", (long)r, (unsigned long)n);
+        ra_log(buf);
+        ra_usb_close();
+        return -1;
+    }
+    deadline = ticks_to_millisecs(gettime()) + RA_USB_TIMEOUT_MS;
+    while (!usb_in_done && ticks_to_millisecs(gettime()) < deadline)
+        usleep(1000);
+    if (!usb_in_done || usb_in_res < 0) {
+        /* No reply (adapter rebooting / unplugged): drop the device so the
+         * pending read is cancelled; the next call finds it again. */
+        snprintf(buf, sizeof(buf), "[RA_USB] no reply (done=%d res=%ld)",
+                 usb_in_done ? 1 : 0, (long)usb_in_res);
+        ra_log(buf);
+        ra_usb_close();
+        return -1;
+    }
+
+    if (rx && rx_len) {
+        memset(rx, 0, rx_len);
+        if ((u32)usb_in_res > tx_len) {
+            copy = (u32)usb_in_res - tx_len;
+            if (copy > rx_len)
+                copy = rx_len;
+            memcpy(rx, usb_in + tx_len, copy);
+        }
+    }
+    return 0;
+}
+
+/* Which link the adapter answered on (set by RA_EXI_Probe). */
+typedef enum { RA_LINK_NONE = 0, RA_LINK_EXI, RA_LINK_USB } ra_link_t;
+static ra_link_t g_link = RA_LINK_NONE;
+
+static s32 ra_transaction(const void *tx, u32 tx_len, void *rx, u32 rx_len)
+{
+    if (g_link == RA_LINK_USB)
+        return usb_transaction(tx, tx_len, rx, rx_len);
+    return exi_transaction(tx, tx_len, rx, rx_len);
+}
+
+/* IDENTIFY over USB: true if the adapter answered with its device id. */
+static bool ra_usb_identify(void)
+{
+    ra_gc_header_t hdr;
+    u8 rx[sizeof(ra_esp_header_t) + sizeof(u32)];
+    char buf[96];
+
+    hdr.magic       = RA_MAGIC_GC_TO_ESP;
+    hdr.command     = RA_CMD_IDENTIFY;
+    hdr.payload_len = 0;
+
+    for (int attempt = 0; attempt < 5; attempt++) {
+        if (attempt > 0)
+            usleep(50000);
+        memset(rx, 0, sizeof(rx));
+        if (usb_transaction(&hdr, sizeof(hdr), rx, sizeof(rx)) < 0)
+            continue;
+        snprintf(buf, sizeof(buf), "[RA_USB] rx(%ld): %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
+            (long)usb_in_res, rx[0],rx[1],rx[2],rx[3],rx[4],rx[5],rx[6],rx[7],rx[8],rx[9]);
+        ra_log(buf);
+        if (((const ra_esp_header_t *)rx)->magic != RA_MAGIC_ESP_TO_GC)
+            continue;
+        u32 dev_id = ((u32)rx[sizeof(ra_esp_header_t)    ] << 24) |
+                     ((u32)rx[sizeof(ra_esp_header_t) + 1] << 16) |
+                     ((u32)rx[sizeof(ra_esp_header_t) + 2] <<  8) |
+                     ((u32)rx[sizeof(ra_esp_header_t) + 3]      );
+        if (dev_id == RA_DEVICE_ID)
+            return true;
+    }
+    return false;
+}
+
+/* -----------------------------------------------------------------------
  * Public API
  * ----------------------------------------------------------------------- */
 
 bool RA_EXI_Probe(void)
 {
     ra_log("[RA_EXI] Probe start");
+
+    /* USB adapter first: if it is in the USB device list, that is the link
+     * (one adapter per console — USB or Slot B, never both). */
+    if (ra_usb_open()) {
+        if (ra_usb_identify()) {
+            g_link = RA_LINK_USB;
+            ra_log("[RA_USB] Probe OK");
+            return true;
+        }
+        ra_log("[RA_USB] adapter listed but not answering — trying EXI");
+        ra_usb_close();
+    }
 
     ra_gc_header_t hdr;
     hdr.magic       = RA_MAGIC_GC_TO_ESP;
@@ -160,6 +386,7 @@ bool RA_EXI_Probe(void)
         ra_log(buf);
 
         if (dev_id == RA_DEVICE_ID) {
+            g_link = RA_LINK_EXI;
             ra_log("[RA_EXI] Probe OK");
             return true;
         }
@@ -190,7 +417,7 @@ bool RA_EXI_ResetCredentials(void)
     s32 rc = -1;
     for (int i = 0; i < 3; i++) {
         u8 rx[sizeof(ra_esp_header_t)] = {0};
-        rc = exi_transaction(&hdr, sizeof(hdr), rx, sizeof(rx));
+        rc = ra_transaction(&hdr, sizeof(hdr), rx, sizeof(rx));
         if (rc == 0) {
             u64 wake = ticks_to_millisecs(gettime()) + 30;
             while (ticks_to_millisecs(gettime()) < wake) ;
@@ -215,7 +442,7 @@ static s32 ra_poll_status(u8 *status)
     poll_hdr.payload_len = 0;
 
     u8 prx[sizeof(ra_esp_header_t)] = {0};
-    if (exi_transaction(&poll_hdr, sizeof(poll_hdr), prx, sizeof(prx)) < 0)
+    if (ra_transaction(&poll_hdr, sizeof(poll_hdr), prx, sizeof(prx)) < 0)
         return -1;
     const ra_esp_header_t *r = (const ra_esp_header_t *)prx;
     if (r->magic != RA_MAGIC_ESP_TO_GC)
@@ -335,7 +562,7 @@ ra_load_result_t RA_EXI_LoadGame(const char *game_id, u32 timeout_ms,
      * previously-prepared tx_buf (typically the IDENTIFY response tail).
      * Don't check magic/status here — proceed directly to polling, which
      * IS the authoritative status channel. */
-    if (exi_transaction(&tx, sizeof(tx), rx6, sizeof(rx6)) < 0)
+    if (ra_transaction(&tx, sizeof(tx), rx6, sizeof(rx6)) < 0)
         return RA_LOAD_ERR_BUS;
     ra_log("[RA_EXI] LOAD_GAME sent, polling for GAME_LOADED");
 
