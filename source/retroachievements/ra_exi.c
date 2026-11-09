@@ -119,7 +119,8 @@ static s32 exi_transaction(const void *tx, u32 tx_len, void *rx, u32 rx_len)
 #define RA_USB_EP_OUT      0x01
 #define RA_USB_EP_IN       0x81
 #define RA_USB_TIMEOUT_MS  500u
-#define RA_USB_LIST_TRIES  5      /* x 100 ms: a fresh USB_Initialize fills the list async */
+#define RA_USB_LIST_TRIES  10     /* x 100 ms: a fresh USB_Initialize fills the list async, and a
+                                     first /dev/usb2 open leaves the OHCI enumerating the adapter */
 
 static s32 g_usb_fd = -1;
 static u8  usb_out[512] ATTRIBUTE_ALIGN(32);
@@ -165,6 +166,16 @@ static bool ra_usb_open(void)
 
     if (g_usb_fd >= 0)
         return true;
+    /* d2x bases 38/56/57: the cIOS's EHCI module keeps every port until the
+     * first open of /dev/usb2 runs its discovery, which hands the full-speed
+     * adapter to the OHCI. The USB mount does that open; with "SD only"
+     * nobody does (Wii U, 2026-11-08). The RAMOD ra-module does it too at
+     * IOS start; this covers a WiiFlow slot without it. Base 58: no-op. */
+    r = IOS_Open("/dev/usb2", 0);
+    if (r >= 0)
+        IOS_Close(r);
+    snprintf(buf, sizeof(buf), "[RA_USB] /dev/usb2 kick=%ld", (long)r);
+    ra_log(buf);
     r = USB_Initialize();
     snprintf(buf, sizeof(buf), "[RA_USB] IOS%ld rev %ld USB_Initialize=%ld",
              (long)IOS_GetVersion(), (long)IOS_GetRevision(), (long)r);

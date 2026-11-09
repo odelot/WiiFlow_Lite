@@ -1218,7 +1218,7 @@ void CMenu::_launchWii(dir_discHdr *hdr, bool dvd, bool disc_cfg)
 					msg = _t("raerr6", L"RetroAchievements login failed — the stored credentials were rejected.\n\nBoot canceled. Use 'Reset adapter WiFi & RA login' in Settings and configure the adapter again.");
 					break;
 				case RA_LOAD_ERR_UNKNOWN_GAME:
-					msg = _t("raerr7", L"This game's hash is not in the RetroAchievements database — probably a bad dump or an unsupported version.\n\nBoot canceled. Verify your game image (e.g. redump) and try again.");
+					msg = _t("raerr7", L"This game's hash is not in the RetroAchievements database.\n\nBoot canceled. Scrubbed .wbfs images usually fail this check, so use a full dump (e.g. redump). Modified games and unsupported versions fail too: disable RetroAchievements in Settings to play them.");
 					break;
 				case RA_LOAD_ERR_TIMEOUT:
 					msg = _t("raerr8", L"RetroAchievements adapter took too long to load the achievement data.\n\nBoot canceled. Check your internet connection and try again.");
