@@ -16,12 +16,15 @@
  * IMPORTANT quirk replicated on purpose: rcheevos seeks the cluster
  * reads at the partition header's data-offset field treated as an
  * ABSOLUTE disc offset (it does NOT add the partition base). For retail
- * discs that lands in the mostly-zero region before the update
- * partition. Bug or not, the RA database is built with this code — we
- * must match it bit for bit. A happy consequence: WBFS images that
- * stripped those (zero/unused) blocks still hash identically, because
- * Dolphin's WBFS reader also presents stripped blocks as zeros — and so
- * do we (see ra_disc_read).
+ * discs that lands in the non-partition gap before the update partition.
+ * Bug or not, the RA database is built with this code — we must match it
+ * bit for bit.
+ *
+ * Consequence for WBFS: no game reads that gap, so scrubbed images discard
+ * it (Super Mario Galaxy and Super Paper Mario keep only 60 of the 1024
+ * clusters) and their MD5 cannot match the RA database. The bytes are gone
+ * from the image: Dolphin rejects these files too, with yet another hash.
+ * Unscrubbed images and physical discs hash correctly.
  *
  * No decryption anywhere: the encrypted path hashes raw disc bytes.
  * Reads go through wbfs_disc_read(), which already unifies the three
@@ -48,14 +51,14 @@
  *
  * d != NULL → stored image via wbfs_disc_read (WBFS partition / .wbfs /
  * .iso). Its "block not allocated" result (1) is mapped to a ZERO-FILLED
- * buffer — matching how Dolphin presents stripped WBFS blocks, which is
- * what the canonical hash expects.
+ * buffer so the read still succeeds; if those blocks fall in the hashed
+ * range the MD5 will miss the RA database (see the file header).
  *
  * d == NULL → PHYSICAL DISC via __WBFS_ReadDVD (WDVD_UnencryptedRead) —
  * the exact same raw-read path WiiFlow's disc-ripper uses, with the same
  * offset>>2 convention; the d2x DI allows it across the disc. If the
  * drive/media refuses (e.g. some retail-disc + drive combinations), the
- * read fails and the caller falls back to the game-ID table. */
+ * read fails and the boot is canceled (raerr2). */
 static s32 ra_disc_read(wbfs_disc_t *d, u64 off, void *buf, u32 len)
 {
     s32 ret;
@@ -116,7 +119,7 @@ s32 RA_ComputeWiiHash(const u8 *discid, const char *path, char out_hex[33])
     do {
         /* Encryption marker: byte 0x61 == 0 means encrypted (retail).
          * Decrypted images hash a different content set in rcheevos —
-         * not supported here; fall back to the ID table. */
+         * not supported here; the boot is canceled (raerr2). */
         if (ra_disc_read(d, 0x60, quad, 4) < 0) break;
         if (quad[1] != 0) {
             RA_EXI_Log("[RA_HASH] image is decrypted-format — unsupported");

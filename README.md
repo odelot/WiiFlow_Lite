@@ -11,6 +11,11 @@
 > no memory card connector, no soldering. This build looks for it on USB first and falls back to
 > the original memory card Slot B link, so both kinds of adapter work with the same `boot.dol`.
 
+> **Wii U.** The same `boot.dol` runs on the Wii U in Wii mode (vWii), with the RA cIOS installed
+> by the vWii installer. The wii-ra-adapter releases ship a separate Wii U package for that; see
+> [Wii U (vWii)](https://github.com/odelot/wii-ra-adapter#wii-u-vwii) for setup and the warning
+> about not mixing up the Wii and vWii cIOS installers.
+
 ---
 
 ## What changed after the fork
@@ -25,15 +30,21 @@ PPC-side hooks the `ra-module` (in the d2x cIOS) depends on afterwards.
 | File | Purpose |
 |---|---|
 | `source/retroachievements/gc_ra_protocol.h` | Shared binary protocol between WiiFlow (PPC), the `ra-module` (ARM/Starlet), and the ESP32 adapter. Defines commands, status codes, packet layouts, and constants such as `RA_DEVICE_ID = 0x52410001`. |
-| `source/retroachievements/ra_exi.h` / `ra_exi.c` | WiiFlow-side **adapter link** (the name predates USB). Called **before** the IOS reload. `RA_EXI_Probe()` looks for the adapter on **USB** first (VID:PID `303A:4052`) and only then on memory card **Slot B**; every later call goes through `ra_transaction()`, which dispatches to whichever link was found. Sends `LOAD_GAME` with the disc ID and the on-console RA hash and blocks until the adapter responds `GAME_LOADED (0x06)` or a timeout expires (90 s). Boot always proceeds — RA is best-effort. Also implements `RA_EXI_ResetCredentials()` and the `sd:/ra_exi_debug.txt` field log. |
-| `source/retroachievements/ra_hash.h` / `ra_hash.c` | On-console computation of the RetroAchievements MD5 fingerprint. Faithful port of rcheevos' `rc_hash_wii_disc()` **encrypted-disc path** — the canonical form the RA hash database is built from — including its quirks, replicated bit-for-bit. Works for WBFS partitions, `.wbfs` and `.iso` images (unified through `wbfs_disc_read`, with stripped WBFS blocks presented as zeros exactly like Dolphin does) and for **physical discs** via the raw-read path the disc ripper uses. Any game the RA database knows is identified without a hardcoded ID→hash table. |
+| `source/retroachievements/ra_exi.h` / `ra_exi.c` | WiiFlow-side **adapter link** (the name predates USB). Called **before** the IOS reload. `RA_EXI_Probe()` looks for the adapter on **USB** first (VID:PID `303A:4052`) and only then on memory card **Slot B**; every later call goes through `ra_transaction()`, which dispatches to whichever link was found. Sends `LOAD_GAME` with the disc ID and the on-console RA hash and blocks until the adapter responds `GAME_LOADED (0x06)` or a timeout expires (90 s). With RetroAchievements on in Settings, any failure cancels the boot with a specific message; with it off, the adapter is never touched. Also implements `RA_EXI_ResetCredentials()` and the `sd:/ra_exi_debug.txt` field log. |
+| `source/retroachievements/ra_hash.h` / `ra_hash.c` | On-console computation of the RetroAchievements MD5 fingerprint. Faithful port of rcheevos' `rc_hash_wii_disc()` **encrypted-disc path** — the canonical form the RA hash database is built from — including its quirks, replicated bit-for-bit. Works for WBFS partitions, `.wbfs` and `.iso` images (unified through `wbfs_disc_read`) and for **physical discs** via the raw-read path the disc ripper uses. Any intact dump the RA database knows is identified without a hardcoded ID→hash table. **Scrubbed `.wbfs` images usually don't match:** the rcheevos quirk hashes a disc region that WBFS scrubbing discards, so those bytes are gone from the image. |
 
 ### The USB link in `ra_exi.c`
 
 The RA protocol is unchanged — only the wire. The adapter firmware built for the cable is a
 vendor-class USB device (`303A:4052`, bulk OUT `0x01`, bulk IN `0x81`):
 
-- **Finding it** — `ra_usb_open()` scans the libogc USB device list (USBV5, retried for ~500 ms
+- **EHCI handoff** — on d2x bases 38/56/57 (WiiFlow itself runs on slot 250, base 57) the d2x
+  EHCI module holds every USB port and hands a full-speed device like the adapter to the OHCI only
+  on the **first open of `/dev/usb2`**. WiiFlow's USB drive mount does that open; with
+  **Mount SD only**, and on the Wii U's vWii, nothing did, and the adapter was never listed. So
+  `ra_usb_open()` opens and closes `/dev/usb2` before it looks (logged as `/dev/usb2 kick=`). The
+  d2x `ra-module` does the same for the game side.
+- **Finding it** — `ra_usb_open()` scans the libogc USB device list (USBV5, retried for ~1 s
   because a fresh `USB_Initialize()` fills the list asynchronously), and on IOSes without USBV5
   opens the device directly by VID:PID on `/dev/usb/oh0`. It selects configuration 1 if needed.
   Every step is written to `sd:/ra_exi_debug.txt`.
