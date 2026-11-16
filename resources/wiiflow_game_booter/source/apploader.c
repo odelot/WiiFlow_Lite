@@ -136,6 +136,13 @@ u32 Apploader_Run(u8 vidMode, GXRModeObj *vmode, bool vipatch, bool countryStrin
 		extern u32 code_size;
 		*(volatile u32 *)0xC0002FE0 = 0x52420000u | ((hooktype & 0xFFu) << 8) | (hookpatched ? 1u : 0u);
 		*(volatile u32 *)0xC0002FE4 = code_size;
+		/* 0x2FE8 = address the VI hook branch went to (the blr patchhook
+		 * replaced), 0x2FEC = multi-DOL branch address (patchcode.c). */
+		{
+			extern u32 ra_hook_at, ra_mdol_at;
+			*(volatile u32 *)0xC0002FE8 = ra_hook_at;
+			*(volatile u32 *)0xC0002FEC = ra_mdol_at;
+		}
 	}
 
 	//! Apply the 480p fix.

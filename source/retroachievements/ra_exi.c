@@ -25,11 +25,55 @@
 #include "ra_exi.h"
 #include "gc_ra_protocol.h"
 
+/* Post-mortem of the PREVIOUS game session (2026-11-14, MadWorld): the
+ * booter and the d2x ra-module leave breadcrumbs in MEM1 0x2FC0..0x2FFF
+ * (see fst.c code_cap). A reset back to WiiFlow usually keeps low MEM1, so
+ * snapshot it before main() — before anything (or our own IOS reload)
+ * can touch it — then clear it so the next session starts clean. Logged
+ * under the session separator by the first ra_log() call. */
+static u32 ra_pm[16];
+
+__attribute__((constructor)) static void ra_pm_capture(void)
+{
+    volatile u32 *pm = (volatile u32 *)0xC0002FC0;
+    int i;
+    for (i = 0; i < 16; i++) {
+        ra_pm[i] = pm[i];
+        pm[i] = 0;
+    }
+}
+
+static void ra_pm_write(FILE *f)
+{
+    /* m = 0x2FC0.. ra-module words: [0] 'RAPM' [1] stage [2] why<<24|chg
+     * [3] last USB init result [4] USB init tries [5] ESP identified
+     * [6] snapshot fires [7] USB transfer errors.
+     * b = 0x2FE0.. booter: [0] crumb 5242hhpp [1] GCT size [2] VI hook addr
+     * [3] multi-DOL hook addr [6] VBI counter (0x2FF8). */
+    const u32 *m = ra_pm, *b = ra_pm + 8;
+    fprintf(f, "\n===== WiiFlow session start (build %s) =====\n", __DATE__);
+    if ((b[0] >> 16) == 0x5242)
+        fprintf(f, "[PM] prev boot: rb=%08X gsz=%08X vih=%08X mdh=%08X ctr=%08X\n",
+                (unsigned)b[0], (unsigned)b[1], (unsigned)b[2], (unsigned)b[3], (unsigned)b[6]);
+    else
+        fprintf(f, "[PM] prev boot: no booter crumb (power-on, Wii Menu in between, or not a WiiFlow boot)\n");
+    if (m[0] == 0x5241504D)
+        fprintf(f, "[PM] ra-module: stage=%02X why=%u chg=%u usb=%d tries=%u esp=%u fires=%u uerr=%u\n",
+                (unsigned)m[1], (unsigned)(m[2] >> 24), (unsigned)(m[2] & 0xFFFFFF),
+                (int)m[3], (unsigned)m[4], (unsigned)m[5], (unsigned)m[6], (unsigned)m[7]);
+    else
+        fprintf(f, "[PM] ra-module: no record (gate never opened, Wii Menu in between, or no RA game)\n");
+}
+
 /* Append one line to sd:/ra_exi_debug.txt for field diagnostics. */
 static void ra_log(const char *msg)
 {
+    static int first = 1;
     FILE *f = fopen("sd:/ra_exi_debug.txt", "a");
-    if (f) { fputs(msg, f); fputc('\n', f); fclose(f); }
+    if (f) {
+        if (first) { first = 0; ra_pm_write(f); }
+        fputs(msg, f); fputc('\n', f); fclose(f);
+    }
 }
 
 void RA_EXI_Log(const char *msg)

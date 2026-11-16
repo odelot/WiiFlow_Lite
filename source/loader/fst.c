@@ -264,8 +264,11 @@ int app_gameconfig_load(const char *discid, u8 *tempgameconf, u32 tempgameconfsi
 u8 *code_buf = NULL;
 u32 code_size = 0;
 
-int ocarina_load_code(const u8 *cheat, u32 cheatSize)
+int ocarina_cheats_dropped = 0;
+
+int ocarina_load_code(const u8 *cheat, u32 cheatSize, int ra_priority)
 {
+	ocarina_cheats_dropped = 0;
 	if (debuggerselect == 0x00)
 		codelist = (u8 *) 0x800022A8;
 	else
@@ -441,12 +444,23 @@ int ocarina_load_code(const u8 *cheat, u32 cheatSize)
 	u32 ra_hook_size = sizeof(ra_vblank_hook);
 
 	/* The counter lives at the tail of the codelist region. Cap the total
-	 * GCT size so the copied codes can never grow into it (0x2FF8..0x2FFF
-	 * reserved). If a user's cheat pack is too big to fit alongside the
-	 * hook, keep the cheats and skip the hook — ra-module falls back to
-	 * timer pacing automatically when the counter never moves. */
-	u32 code_cap = (u32)0x80002FF8 - (u32)codelist;
+	 * GCT size so the copied codes can never grow into it. 0x2FC0..0x2FFF
+	 * is reserved: 0x2FC0 ra-module post-mortem words, 0x2FE0 booter
+	 * breadcrumbs, 0x2FF0/0x2FF4 hook scratch, 0x2FF8 counter, 0x2FFC trophy
+	 * flag. If a user's cheat pack is too big to fit alongside the hook:
+	 *  - RetroAchievements on (ra_priority): the cheats are dropped and the
+	 *    hook stays — RA needs the frame counter, cheats are optional;
+	 *  - RA off: the cheats are kept and the hook is skipped (nothing reads
+	 *    the counter then). */
+	u32 code_cap = (u32)0x80002FC0 - (u32)codelist;
 	int inject_hook = 1;
+	if (ra_priority && cheatSize > 0 && cheat != NULL && cheatSize + ra_hook_size > code_cap) {
+		gprintf("Ocarina: GCT too big next to the RA hook (%u + %u > %u), RetroAchievements is on: cheats dropped.\n",
+		        cheatSize, ra_hook_size, code_cap);
+		cheat = NULL;
+		cheatSize = 0;
+		ocarina_cheats_dropped = 1;
+	}
 	if (cheatSize + ra_hook_size > code_cap) {
 		gprintf("Ocarina: GCT too big for RA hook (%u + %u > %u), skipping hook.\n",
 		        cheatSize, ra_hook_size, code_cap);

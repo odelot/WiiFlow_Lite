@@ -31,7 +31,11 @@ extern u8 debuggerselect;
 #define MAX_GCT_SIZE 2056
 
 int app_gameconfig_load(const char *discid, u8 *tempgameconf, u32 tempgameconfsize);
-int ocarina_load_code(const u8 *cheat, u32 cheatSize);
+/* ra_priority != 0 (RetroAchievements on): if the user's GCT does not fit
+ * next to the RA hook, the cheats are dropped and the hook stays.
+ * ocarina_cheats_dropped tells the caller it happened. */
+int ocarina_load_code(const u8 *cheat, u32 cheatSize, int ra_priority);
+extern int ocarina_cheats_dropped;
 int ocarina_do_code();
 
 #ifdef __cplusplus
