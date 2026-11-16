@@ -1036,7 +1036,7 @@ void CMenu::_launchChannel(dir_discHdr *hdr)
 	}
 
 	setLanguage(language);// set configbyte[0] for external booter
-	ocarina_load_code(cheatFile, cheatSize);// copy to address used by external booter
+	ocarina_load_code(cheatFile, cheatSize, 0);// copy to address used by external booter
 	if(cheatFile != NULL)
 		MEM2_free(cheatFile);
 	NandHandle.Patch_AHB(); /* Identify maybe uses it so keep AHBPROT disabled */
@@ -1485,11 +1485,12 @@ void CMenu::_launchWii(dir_discHdr *hdr, bool dvd, bool disc_cfg)
 	int ra_gct_size = 0;
 	if(cheatFile != NULL || ra_active)
 	{
-		ra_gct_size = ocarina_load_code(cheatFile, cheatSize);
+		ra_gct_size = ocarina_load_code(cheatFile, cheatSize, ra_active ? 1 : 0);
 		if(cheatFile != NULL)
 			MEM2_free(cheatFile);
 	}
-	if(ra_active) RA_EXI_Log(fmt("[WF] G: ocarina done gct=%d", ra_gct_size));
+	if(ra_active) RA_EXI_Log(fmt("[WF] G: ocarina done gct=%d%s", ra_gct_size,
+	                             ocarina_cheats_dropped ? " (cheats dropped: too big next to the RA hook)" : ""));
 	
 	/* move gameconfig for external booter */
 	if(gameconfig != NULL)

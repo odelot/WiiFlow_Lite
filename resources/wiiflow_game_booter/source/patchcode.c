@@ -198,6 +198,24 @@ const u8 PATTERN_AA[12][2] = {
     {9, 2}, {3, 6}, {9, 10}
 };
 
+/* RA diagnostics (2026-11-14, MadWorld): where the hook branch and the
+ * multi-DOL branch were written, published by apploader.c at phys
+ * 0x2FE8 / 0x2FEC for the d2x ra-module. ra_hook_blr mirrors patchhook's
+ * search (first blr within len words of the match). 0 = never patched. */
+u32 ra_hook_at = 0;
+u32 ra_mdol_at = 0;
+
+static u32 ra_hook_blr(void *match, u32 len)
+{
+	u32 *p = (u32 *)match;
+	while (len--) {
+		if (*p == 0x4E800020)
+			return (u32)p;
+		p++;
+	}
+	return 0;
+}
+
 bool dogamehooks(void *addr, u32 len, bool channel)
 {
 	/*
@@ -226,6 +244,7 @@ bool dogamehooks(void *addr, u32 len, bool channel)
 			case 0x01:
 				if(memcmp(addr_start, viwiihooks, sizeof(viwiihooks))==0)
 				{
+					ra_hook_at = ra_hook_blr(addr_start, len);
 					patchhook((u32)addr_start, len);
 					hookpatched = true;
 				}
@@ -305,6 +324,7 @@ bool dogamehooks(void *addr, u32 len, bool channel)
 			}
 			else if(!channel && memcmp(addr_start, multidolhooks, sizeof(multidolhooks))==0)
 			{
+				ra_mdol_at = (u32)addr_start+sizeof(multidolhooks)-4;
 				multidolhook((u32)addr_start+sizeof(multidolhooks)-4);
 				hookpatched = true;
 			}			

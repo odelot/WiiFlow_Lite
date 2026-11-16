@@ -30,7 +30,7 @@ PPC-side hooks the `ra-module` (in the d2x cIOS) depends on afterwards.
 | File | Purpose |
 |---|---|
 | `source/retroachievements/gc_ra_protocol.h` | Shared binary protocol between WiiFlow (PPC), the `ra-module` (ARM/Starlet), and the ESP32 adapter. Defines commands, status codes, packet layouts, and constants such as `RA_DEVICE_ID = 0x52410001`. |
-| `source/retroachievements/ra_exi.h` / `ra_exi.c` | WiiFlow-side **adapter link** (the name predates USB). Called **before** the IOS reload. `RA_EXI_Probe()` looks for the adapter on **USB** first (VID:PID `303A:4052`) and only then on memory card **Slot B**; every later call goes through `ra_transaction()`, which dispatches to whichever link was found. Sends `LOAD_GAME` with the disc ID and the on-console RA hash and blocks until the adapter responds `GAME_LOADED (0x06)` or a timeout expires (90 s). With RetroAchievements on in Settings, any failure cancels the boot with a specific message; with it off, the adapter is never touched. Also implements `RA_EXI_ResetCredentials()` and the `sd:/ra_exi_debug.txt` field log. |
+| `source/retroachievements/ra_exi.h` / `ra_exi.c` | WiiFlow-side **adapter link** (the name predates USB). Called **before** the IOS reload. `RA_EXI_Probe()` looks for the adapter on **USB** first (VID:PID `303A:4052`) and only then on memory card **Slot B**; every later call goes through `ra_transaction()`, which dispatches to whichever link was found. Sends `LOAD_GAME` with the disc ID and the on-console RA hash and blocks until the adapter responds `GAME_LOADED (0x06)` or a timeout expires (90 s); intermediate statuses such as `LOADING_GAME (0x05)` and `PROCESSING (0x09, parsing a large set)` keep it waiting. With RetroAchievements on in Settings, any failure cancels the boot with a specific message; with it off, the adapter is never touched. Also implements `RA_EXI_ResetCredentials()` and the `sd:/ra_exi_debug.txt` field log. |
 | `source/retroachievements/ra_hash.h` / `ra_hash.c` | On-console computation of the RetroAchievements MD5 fingerprint. Faithful port of rcheevos' `rc_hash_wii_disc()` **encrypted-disc path** — the canonical form the RA hash database is built from — including its quirks, replicated bit-for-bit. Works for WBFS partitions, `.wbfs` and `.iso` images (unified through `wbfs_disc_read`) and for **physical discs** via the raw-read path the disc ripper uses. Any intact dump the RA database knows is identified without a hardcoded ID→hash table. **Scrubbed `.wbfs` images usually don't match:** the rcheevos quirk hashes a disc region that WBFS scrubbing discards, so those bytes are gone from the image. |
 
 ### The USB link in `ra_exi.c`
@@ -102,10 +102,39 @@ that the codehandler executes on every vertical retrace. The extended variant
   previous framebuffer, so it survives double buffering. Assembly source in
   `docs/ra_trophy/ra_trophy_hook.s`.
 
-The counter/flag live in the reserved tail of the Ocarina codelist region (`0x2FF8..0x2FFF`);
-the GCT size is capped so user cheat packs can never grow into it. If a cheat pack is too big to
-fit alongside the hook, the cheats win and the hook is skipped — the `ra-module` falls back to
-timer pacing automatically.
+The counter and flag live in the reserved tail of the Ocarina codelist region. The GCT size is
+capped at `0x2FC0` so user cheat packs can never grow into that tail, which holds:
+
+| Address | Contents |
+|---|---|
+| `0x2FC0`–`0x2FDF` | `ra-module` post-mortem words (see *Boot breadcrumbs*) |
+| `0x2FE0`–`0x2FEF` | booter breadcrumbs |
+| `0x2FF0` / `0x2FF4` | hook scratch |
+| `0x2FF8` | frame counter |
+| `0x2FFC` | trophy flag |
+
+If a cheat pack is too big to fit alongside the hook and RetroAchievements is on, the **cheats are
+dropped** and the hook stays (the field log notes it): RA depends on the counter, the cheats are
+optional. With RetroAchievements off, the cheats are kept and the hook is skipped, since nothing
+reads the counter then.
+
+### Boot breadcrumbs and session post-mortem
+
+Added while chasing games that stayed in spectator mode (MadWorld). RA behavior is unchanged.
+
+- **Breadcrumbs.** The game booter (`resources/wiiflow_game_booter`, `apploader.c` /
+  `patchcode.c`) writes `0x5242hhpp` at `0x2FE0` (a WiiFlow RA boot), the address the VI hook
+  branch went to at `0x2FE8` (the `blr` that `patchhook` replaced) and the multi-DOL branch
+  address at `0x2FEC`. The `ra-module` uses the first one, plus the RA counter code in the
+  codelist, to open its game-alive gate when the hooked function is barely called (its
+  *slow-hook escape*).
+- **Post-mortem.** On start, before `main()` and before anything (including WiiFlow's own IOS
+  reload) can touch low MEM1, `ra_exi.c` copies `0x2FC0..0x2FFF` and clears it. A reset back to
+  WiiFlow usually keeps that memory, so the first log line of the session in
+  `sd:/ra_exi_debug.txt` is a separator followed by what the previous game left:
+  - `[PM] prev boot: rb= gsz= vih= mdh= ctr=` — the booter breadcrumbs and the frame counter;
+  - `[PM] ra-module: stage= why= chg= usb= tries= esp= fires= uerr=` — how far the module got;
+  - or a line saying there is no record (power-on, Wii Menu in between, or not a WiiFlow boot).
 
 ### Changes to the settings menu
 
